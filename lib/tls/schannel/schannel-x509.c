@@ -144,6 +144,10 @@ lws_tls_schannel_cert_info(PCCERT_CONTEXT pCert, enum lws_tls_cert_info type,
 	return 0;
 }
 
+struct lws_x509_cert {
+	PCCERT_CONTEXT cert;
+};
+
 int
 lws_tls_vhost_cert_info(struct lws_vhost *vhost, enum lws_tls_cert_info type,
 		union lws_tls_cert_info_results *buf, size_t len)
@@ -191,7 +195,7 @@ lws_x509_info(struct lws_x509_cert *x509, enum lws_tls_cert_info type,
 }
 
 int
-lws_tls_server_client_cert_verify_config(struct lws_vhost *vh)
+lws_x509_create(struct lws_x509_cert **x509)
 {
 	return 0;
 }
