@@ -427,17 +427,16 @@ typedef void X509_VERIFY_PARAM;
 #endif
 
 #endif
-#elif defined(LWS_WITH_GNUTLS)
-#include <gnutls/gnutls.h>
-#include <gnutls/crypto.h>
-#include <gnutls/abstract.h>
-#include <gnutls/x509.h>
-#include <netinet/in.h>
-#include <unistd.h>
-typedef struct gnutls_session_int SSL;
-typedef struct lws_tls_gnutls_ctx SSL_CTX;
+#elif defined(LWS_WITH_OPENHITLS)
+#include <hitls.h>
+#include <hitls_cert_type.h>
+struct lws_tls_openhitls_ctx;
+struct lws_tls_openhitls_x509;
+typedef HITLS_Ctx SSL;
+typedef struct lws_tls_openhitls_ctx SSL_CTX;
 typedef void BIO;
-typedef struct gnutls_x509_crt_int X509;
+typedef struct lws_tls_openhitls_x509 X509;
+typedef HITLS_CERT_StoreCtx X509_STORE_CTX;
 #else
 #include <openssl/ssl.h>
 #if !defined(LWS_WITH_MBEDTLS)

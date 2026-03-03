@@ -15,23 +15,7 @@
  */
 
 #include <libwebsockets.h>
-
-enum {
-	LWS_SW_AMOUNT,
-	LWS_SW_A,
-	LWS_SW_I,
-	LWS_SW_P,
-	LWS_SW_HELP,
-};
-
-static const struct lws_switches switches[] = {
-	[LWS_SW_AMOUNT]	= { "--amount",        "Amount of something" },
-	[LWS_SW_A]	= { "-a",              "Enable -a feature" },
-	[LWS_SW_I]	= { "-i",              "Interface to bind to" },
-	[LWS_SW_P]	= { "-p",              "Port number to listen or connect on" },
-	[LWS_SW_HELP]	= { "--help",		"Show this help information" },
-};
-
+#include <stdio.h>
 #include <string.h>
 #include <signal.h>
 

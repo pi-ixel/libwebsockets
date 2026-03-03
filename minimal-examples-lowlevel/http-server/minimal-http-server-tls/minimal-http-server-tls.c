@@ -17,19 +17,7 @@
  */
 
 #include <libwebsockets.h>
-
-enum {
-	LWS_SW_PORT,
-	LWS_SW_H,
-	LWS_SW_HELP,
-};
-
-static const struct lws_switches switches[] = {
-	[LWS_SW_PORT]	= { "--port",          "Port to connect or listen on" },
-	[LWS_SW_H]	= { "-h",              "Strict Host Check / Help" },
-	[LWS_SW_HELP]	= { "--help",		"Show this help information" },
-};
-
+#include <stdio.h>
 #include <string.h>
 #include <signal.h>
 #include <errno.h>
