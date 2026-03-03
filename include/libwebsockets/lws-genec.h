@@ -40,15 +40,6 @@ struct lws_genec_ctx {
 		mbedtls_ecdh_context *ctx_ecdh;
 		mbedtls_ecdsa_context *ctx_ecdsa;
 	} u;
-#elif defined(LWS_WITH_SCHANNEL)
-	struct {
-		void *hAlg;
-		void *hKey;
-		void *hKeyPeer; /* For ECDH peer public key */
-	} u;
-#elif defined(LWS_WITH_GNUTLS)
-	gnutls_privkey_t priv;
-	gnutls_pubkey_t pub;
 #elif defined(LWS_WITH_OPENHITLS)
 	CRYPT_EAL_PkeyCtx *ctx[2];
 #else

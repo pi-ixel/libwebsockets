@@ -66,7 +66,7 @@ if (LWS_WITH_BORINGSSL OR LWS_WITH_AWSLC)
 	set (LWS_WITH_GENHASH OFF PARENT_SCOPE)
 endif()
 
-if (LWS_WITH_SSL AND NOT LWS_WITH_WOLFSSL AND NOT LWS_WITH_MBEDTLS AND NOT LWS_WITH_SCHANNEL AND NOT LWS_WITH_OPENHITLS)
+if (LWS_WITH_SSL AND NOT LWS_WITH_WOLFSSL AND NOT LWS_WITH_MBEDTLS AND NOT LWS_WITH_OPENHITLS)
 	if ("${LWS_OPENSSL_LIBRARIES}" STREQUAL "" OR "${LWS_OPENSSL_INCLUDE_DIRS}" STREQUAL "")
 	else()
 		if (NOT LWS_PLAT_FREERTOS)
@@ -213,6 +213,7 @@ if (LWS_WITH_SSL)
 	elseif (LWS_WITH_OPENHITLS)
 		list(APPEND SOURCES
 			tls/openhitls/openhitls-tls.c
+			tls/openhitls/openhitls-session.c
 			tls/openhitls/openhitls-ssl.c
 			tls/openhitls/openhitls-x509.c)
 		if (NOT LWS_WITHOUT_SERVER)
@@ -267,7 +268,7 @@ if (LWS_WITH_SSL)
 				tls/mbedtls/mbedtls-server.c)
 		elseif (LWS_WITH_OPENHITLS)
 			# OpenHITLS backend provides server entrypoints in openhitls-server.c
-		elseif(NOT LWS_WITH_SCHANNEL AND NOT LWS_WITH_GNUTLS)
+		else()
 			list(APPEND SOURCES
 				tls/openssl/openssl-server.c)
 		endif()
@@ -280,7 +281,7 @@ if (LWS_WITH_SSL)
 				tls/mbedtls/mbedtls-client.c)
 		elseif (LWS_WITH_OPENHITLS)
 			# OpenHITLS backend provides client entrypoints in openhitls-client.c
-		elseif(NOT LWS_WITH_SCHANNEL AND NOT LWS_WITH_GNUTLS)
+		else()
 			list(APPEND SOURCES
 				tls/openssl/openssl-client.c)
 		endif()
@@ -404,10 +405,6 @@ if (LWS_WITH_SSL)
 		set(chose_ssl 1)
 	endif()
 
-       if (LWS_WITH_SCHANNEL OR LWS_WITH_GNUTLS)
-               set(chose_ssl 1)
-       endif()
-
 	if (NOT chose_ssl)
 		if (OPENSSL_FOUND AND "${OPENSSL_INCLUDE_DIRS}" STREQUAL "")
 			set(OPENSSL_INCLUDE_DIRS "${OPENSSL_INCLUDE_DIR}")
@@ -481,9 +478,7 @@ if (NOT VARIA)
 	set(VARIA "")
 endif()
 
-if (LWS_WITH_SCHANNEL)
-elseif (LWS_WITH_OPENHITLS)
-else()
+if (NOT LWS_WITH_OPENHITLS)
 
 CHECK_FUNCTION_EXISTS(${VARIA}SSL_CTX_set1_param LWS_HAVE_SSL_CTX_set1_param PARENT_SCOPE)
 CHECK_FUNCTION_EXISTS(${VARIA}SSL_set_info_callback LWS_HAVE_SSL_SET_INFO_CALLBACK PARENT_SCOPE)
@@ -521,7 +516,7 @@ CHECK_FUNCTION_EXISTS(${VARIA}SSL_CTX_set_keylog_callback LWS_HAVE_SSL_CTX_set_k
 # deprecated in openssl v3
 CHECK_FUNCTION_EXISTS(${VARIA}EC_KEY_new_by_curve_name LWS_HAVE_EC_KEY_new_by_curve_name PARENT_SCOPE)
 
-if (LWS_WITH_SSL AND NOT LWS_WITH_MBEDTLS AND NOT LWS_WITH_SCHANNEL AND NOT LWS_WITH_OPENHITLS)
+if (LWS_WITH_SSL AND NOT LWS_WITH_MBEDTLS AND NOT LWS_WITH_OPENHITLS)
 	# we don't want to confuse what's in or out of the wrapper with
 	# what's in an openssl also installed on the build host
 CHECK_C_SOURCE_COMPILES("#include <openssl/ssl.h>\nint main(void) { STACK_OF(X509) *c = NULL; SSL_CTX *ctx = NULL; return (int)SSL_CTX_get_extra_chain_certs_only(ctx, &c); }\n" LWS_HAVE_SSL_EXTRA_CHAIN_CERTS)
@@ -540,6 +535,7 @@ CHECK_FUNCTION_EXISTS(${VARIA}EVP_aes_128_wrap LWS_HAVE_EVP_aes_128_wrap PARENT_
 CHECK_FUNCTION_EXISTS(${VARIA}EC_POINT_get_affine_coordinates LWS_HAVE_EC_POINT_get_affine_coordinates PARENT_SCOPE)
 CHECK_FUNCTION_EXISTS(${VARIA}SSL_CTX_load_verify_file LWS_HAVE_SSL_CTX_load_verify_file PARENT_SCOPE)
 CHECK_FUNCTION_EXISTS(${VARIA}SSL_CTX_load_verify_dir LWS_HAVE_SSL_CTX_load_verify_dir PARENT_SCOPE)
+	endif()
 endif()
 
 endif() # schannel

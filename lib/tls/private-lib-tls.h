@@ -86,10 +86,6 @@
   #else
    #include "openssl/ssl.h" /* wrapper !!!! */
   #endif
-  #elif defined(LWS_WITH_GNUTLS)
-   #include <gnutls/gnutls.h>
-   #include <gnutls/abstract.h>
-   #include <gnutls/crypto.h>
   #elif defined(LWS_WITH_OPENHITLS)
    #include "openhitls/private.h"
   #else
@@ -148,25 +144,15 @@ lws_tls_restrict_return(struct lws *wsi);
 void
 lws_tls_restrict_return_handshake(struct lws *wsi);
 
-#if defined(LWS_WITH_SCHANNEL)
-struct lws_tls_schannel_conn;
-struct lws_tls_schannel_ctx;
-struct lws_tls_schannel_bio;
-struct lws_tls_schannel_x509;
-typedef struct lws_tls_schannel_conn lws_tls_conn;
-typedef struct lws_tls_schannel_ctx lws_tls_ctx;
-typedef struct lws_tls_schannel_bio lws_tls_bio;
-typedef struct lws_tls_schannel_x509 lws_tls_x509;
- #elif defined(LWS_WITH_GNUTLS)
- #include "gnutls/private.h"
- #elif defined(LWS_WITH_OPENHITLS)
- #include "openhitls/private.h"
- #else
- typedef SSL lws_tls_conn;
- typedef SSL_CTX lws_tls_ctx;
- typedef BIO lws_tls_bio;
- typedef X509 lws_tls_x509;
- #endif
+
+#if defined(LWS_WITH_OPENHITLS)
+#include "openhitls/private.h"
+#else
+typedef SSL lws_tls_conn;
+typedef SSL_CTX lws_tls_ctx;
+typedef BIO lws_tls_bio;
+typedef X509 lws_tls_x509;
+#endif
 
 #if defined(LWS_WITH_NETWORK)
 #include "private-network.h"
@@ -179,8 +165,7 @@ void
 lws_context_deinit_ssl_library(struct lws_context *context);
 #define LWS_SSL_ENABLED(vh) (vh && vh->tls.use_ssl)
 
-extern const struct lws_tls_ops tls_ops_openssl, tls_ops_mbedtls, tls_ops_schannel,
-					 tls_ops_gnutls, tls_ops_openhitls;
+extern const struct lws_tls_ops tls_ops_openssl, tls_ops_mbedtls, tls_ops_openhitls;
 
 struct lws_ec_valid_curves {
 	int id;

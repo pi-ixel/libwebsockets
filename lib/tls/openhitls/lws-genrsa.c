@@ -49,13 +49,7 @@ lws_genrsa_set_crypt_padding(struct lws_genrsa_ctx *ctx)
 		return -1;
 	}
 	if (ctx->mode == LGRSAM_PKCS1_OAEP_PSS) {
-		BSL_Param oaep_param[] = {
-			{ CRYPT_PARAM_RSA_MD_ID, BSL_PARAM_TYPE_INT32,
-			  &mdId, sizeof(mdId), 0 },
-			{ CRYPT_PARAM_RSA_MGF1_ID, BSL_PARAM_TYPE_INT32,
-			  &mdId, sizeof(mdId), 0 },
-			BSL_PARAM_END
-		};
+		BSL_Param oaep_param[3] = { {0} };
 
 		mdId = lws_genhash_type_to_hitls_md_id(ctx->oaep_hashid);
 		if (mdId == CRYPT_MD_MAX) {
@@ -63,6 +57,20 @@ lws_genrsa_set_crypt_padding(struct lws_genrsa_ctx *ctx)
 				 (int)ctx->oaep_hashid);
 			return -1;
 		}
+
+		oaep_param[0].key = CRYPT_PARAM_RSA_MD_ID;
+		oaep_param[0].value = &mdId;
+		oaep_param[0].valueLen = sizeof(mdId);
+		oaep_param[0].valueType = BSL_PARAM_TYPE_INT32;
+		oaep_param[1].key = CRYPT_PARAM_RSA_MGF1_ID;
+		oaep_param[1].value = &mdId;
+		oaep_param[1].valueLen = sizeof(mdId);
+		oaep_param[1].valueType = BSL_PARAM_TYPE_INT32;
+		oaep_param[2].key = 0;
+		oaep_param[2].valueType = 0;
+		oaep_param[2].value = NULL;
+		oaep_param[2].valueLen = 0;
+		oaep_param[2].useLen = 0;
 
 		ret = CRYPT_EAL_PkeyCtrl(ctx->ctx, CRYPT_CTRL_SET_RSA_RSAES_OAEP,
 					 oaep_param, 0);

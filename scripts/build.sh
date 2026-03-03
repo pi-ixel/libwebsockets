@@ -9,6 +9,7 @@ cmake_args=()
 tls_choice=""
 profile="fulltests"
 run_ctest=0
+prefix=""
 
 if command -v getconf >/dev/null 2>&1; then
   jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
@@ -22,7 +23,7 @@ jobs="${JOBS:-${jobs}}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/build.sh [debug] [tls] [profile] [run-tests] [options]
+Usage: scripts/build.sh [debug] [asan] [tls] [profile] [run-tests] [--prefix <name>] [options]
 
 TLS options (choose one, default: openssl):
   openssl | mbedtls | wolfssl | libressl | boringssl | awslc | openhitls
@@ -31,72 +32,108 @@ Build profile (choose one, default: fulltests):
   fulltests | minimal
 
 Execution options:
-  run-tests   Install into DESTDIR and run ctest after building
+  asan             Enable AddressSanitizer for build configuration
+  run-tests        Install into DESTDIR and run ctest after building
 
 Options:
-  -h, --help  Show help
+  --prefix <name>  Use build-<name> and destdir-<name>
+  -h, --help       Show help
+
+Notes:
+  This script owns configure/build decisions.
+  Default output directories are build and destdir.
+  Use scripts/run-tests.sh to install and run tests from an existing build directory.
 
 Environment variables:
   BUILD_DIR              Override build directory
   DESTDIR_DIR            Override DESTDIR used by run-tests
   JOBS                   Override parallel build jobs
+  OPENSSL_ROOT_DIR       OpenSSL installation prefix for CMake discovery
+  OPENSSL_EXECUTABLE     OpenSSL executable used for cert generation
+  LWS_OPENSSL_INCLUDE_DIRS  OpenSSL include dirs (semicolon-separated)
+  LWS_OPENSSL_LIBRARIES     OpenSSL libraries (semicolon-separated)
   OPENHITLS_INCLUDE_DIRS  OpenHITLS include dirs (semicolon-separated)
   OPENHITLS_LIBRARIES     OpenHITLS libraries (semicolon-separated)
 
 Examples:
   scripts/build.sh
   scripts/build.sh debug
+  scripts/build.sh asan
   scripts/build.sh openssl
+  scripts/build.sh debug asan mbedtls
   scripts/build.sh debug mbedtls
-  scripts/build.sh openhitls fulltests
-  scripts/build.sh openhitls minimal
-  scripts/build.sh openhitls fulltests run-tests
-  OPENHITLS_INCLUDE_DIRS=/path/include OPENHITLS_LIBRARIES=/path/lib/libopenhitls.so \\
-    scripts/build.sh openhitls
+  scripts/build.sh openhitls fulltests asan
+  scripts/build.sh openhitls fulltests asan --prefix hitls-asan
+  scripts/build.sh --prefix hitls-asan openhitls fulltests asan
+  BUILD_DIR=custom-build scripts/build.sh openhitls fulltests --prefix hitls
 EOF
 }
 
-for arg in "$@"; do
-  case "${arg}" in
+validate_prefix() {
+  local value="$1"
+
+  if [ -z "${value}" ] || [[ "${value}" == *"/"* ]] || [[ "${value}" == *".."* ]] || [[ "${value}" =~ [[:space:]] ]] || [[ ! "${value}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "Invalid prefix: ${value}" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+while [ "$#" -gt 0 ]; do
+  case "${1}" in
     debug)
       cmake_args+=("-DCMAKE_BUILD_TYPE=DEBUG")
       ;;
+    asan)
+      cmake_args+=("-DLWS_WITH_ASAN=1")
+      ;;
     openssl|mbedtls|wolfssl|libressl|boringssl|awslc|openhitls)
-      if [ -n "${tls_choice}" ] && [ "${tls_choice}" != "${arg}" ]; then
+      if [ -n "${tls_choice}" ] && [ "${tls_choice}" != "${1}" ]; then
         echo "Only one TLS option is allowed: already set to '${tls_choice}'" >&2
         exit 2
       fi
-      tls_choice="${arg}"
+      tls_choice="${1}"
       ;;
     fulltests|minimal)
-      profile="${arg}"
+      profile="${1}"
       ;;
     run-tests)
       run_ctest=1
+      ;;
+    --prefix)
+      shift
+      if [ -z "${1:-}" ]; then
+        echo "Option --prefix requires an argument." >&2
+        usage >&2
+        exit 2
+      fi
+      validate_prefix "${1}"
+      prefix="${1}"
       ;;
     -h|--help)
       usage
       exit 0
       ;;
     *)
-      echo "Unknown argument: ${arg}" >&2
+      echo "Unknown argument: ${1}" >&2
       usage >&2
       exit 2
       ;;
   esac
+  shift
 done
 
 if [ -z "${build_dir}" ]; then
-  if [ "${profile}" = "fulltests" ] && [ "${tls_choice}" = "openhitls" ]; then
-    build_dir="build-176-hitls"
+  if [ -n "${prefix}" ]; then
+    build_dir="build-${prefix}"
   else
     build_dir="build"
   fi
 fi
 
 if [ -z "${destdir_dir}" ]; then
-  if [ "${profile}" = "fulltests" ] && [ "${tls_choice}" = "openhitls" ]; then
-    destdir_dir="destdir-176-hitls"
+  if [ -n "${prefix}" ]; then
+    destdir_dir="destdir-${prefix}"
   else
     destdir_dir="destdir"
   fi
@@ -106,8 +143,34 @@ build_dir="${BUILD_DIR:-${build_dir}}"
 destdir_dir="${DESTDIR_DIR:-${destdir_dir}}"
 
 case "${tls_choice}" in
-  "") ;;
-  openssl) ;;
+  "")
+    if [ -n "${OPENSSL_ROOT_DIR:-}" ]; then
+      cmake_args+=("-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}")
+    fi
+    if [ -n "${OPENSSL_EXECUTABLE:-}" ]; then
+      cmake_args+=("-DOPENSSL_EXECUTABLE=${OPENSSL_EXECUTABLE}")
+    fi
+    if [ -n "${LWS_OPENSSL_INCLUDE_DIRS:-}" ]; then
+      cmake_args+=("-DLWS_OPENSSL_INCLUDE_DIRS=${LWS_OPENSSL_INCLUDE_DIRS}")
+    fi
+    if [ -n "${LWS_OPENSSL_LIBRARIES:-}" ]; then
+      cmake_args+=("-DLWS_OPENSSL_LIBRARIES=${LWS_OPENSSL_LIBRARIES}")
+    fi
+    ;;
+  openssl)
+    if [ -n "${OPENSSL_ROOT_DIR:-}" ]; then
+      cmake_args+=("-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}")
+    fi
+    if [ -n "${OPENSSL_EXECUTABLE:-}" ]; then
+      cmake_args+=("-DOPENSSL_EXECUTABLE=${OPENSSL_EXECUTABLE}")
+    fi
+    if [ -n "${LWS_OPENSSL_INCLUDE_DIRS:-}" ]; then
+      cmake_args+=("-DLWS_OPENSSL_INCLUDE_DIRS=${LWS_OPENSSL_INCLUDE_DIRS}")
+    fi
+    if [ -n "${LWS_OPENSSL_LIBRARIES:-}" ]; then
+      cmake_args+=("-DLWS_OPENSSL_LIBRARIES=${LWS_OPENSSL_LIBRARIES}")
+    fi
+    ;;
   mbedtls) cmake_args+=("-DLWS_WITH_MBEDTLS=1") ;;
   wolfssl) cmake_args+=("-DLWS_WITH_WOLFSSL=1") ;;
   libressl) cmake_args+=("-DLWS_WITH_LIBRESSL=1") ;;
@@ -168,9 +231,9 @@ fi
 cmake --build "${repo_root}/${build_dir}" -- -j"${jobs}"
 
 if [ "${run_ctest}" -eq 1 ]; then
-  rm -rf "${repo_root}/${destdir_dir}"
-  make -C "${repo_root}/${build_dir}" -j"${jobs}" \
-    DESTDIR="${repo_root}/${destdir_dir}" install
-  LD_LIBRARY_PATH="${repo_root}/${destdir_dir}/usr/local/share/libwebsockets-test-server/plugins" \
-    ctest --test-dir "${repo_root}/${build_dir}" -j"${jobs}" --output-on-failure
+  bash "${repo_root}/scripts/run-tests.sh" \
+    --build-dir "${repo_root}/${build_dir}" \
+    --destdir "${repo_root}/${destdir_dir}" \
+    -t "${jobs}"
 fi
+

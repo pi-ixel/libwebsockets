@@ -58,7 +58,7 @@ lws_openhitls_tls_ss_free(struct lws_vhost *vhost)
 }
 
 static int32_t
-lws_openhitls_server_name_cb(HITLS_Ctx *ssl, int *alert, void *arg)
+lws_ssl_server_name_cb(HITLS_Ctx *ssl, int *alert, void *arg)
 {
 	struct lws_context *context = (struct lws_context *)arg;
 	const HITLS_Config *current;
@@ -112,7 +112,7 @@ lws_openhitls_server_name_cb(HITLS_Ctx *ssl, int *alert, void *arg)
 }
 
 static int
-lws_openhitls_server_verify_cb(int32_t is_preverify_ok,
+OpenHiTLS_verify_callback(int32_t is_preverify_ok,
 			       HITLS_CERT_StoreCtx *store_ctx)
 {
 	lws_tls_conn *ssl = lws_openhitls_verify_get_ssl();
@@ -206,6 +206,75 @@ lws_openhitls_cfg_load_buffer_autofmt(HITLS_Config *config, const void *buf,
 						 loader);
 }
 
+static int
+lws_openhitls_cfg_load_certkey_pair(HITLS_Config *config, const char *cert,
+				    const char *private_key,
+				    const char *mem_cert,
+				    size_t len_mem_cert,
+				    const char *mem_privkey,
+				    size_t mem_privkey_len)
+{
+	int ret;
+
+	if (!config)
+		return -1;
+
+	if ((mem_cert && len_mem_cert) != (mem_privkey && mem_privkey_len)) {
+		lwsl_err("%s: memory cert/key must be provided as a pair\n",
+			 __func__);
+		return -1;
+	}
+
+	if (!!cert != !!private_key) {
+		lwsl_err("%s: file cert/key must be provided as a pair\n",
+			 __func__);
+		return -1;
+	}
+
+	if (mem_cert && len_mem_cert) {
+		ret = lws_openhitls_cfg_load_buffer_autofmt(config, mem_cert,
+				len_mem_cert, HITLS_CFG_LoadCertBuffer);
+		if (ret != HITLS_SUCCESS) {
+			lwsl_err("%s: HITLS_CFG_LoadCertBuffer failed: 0x%x\n",
+				 __func__, ret);
+			return -1;
+		}
+
+		ret = lws_openhitls_cfg_load_buffer_autofmt(config, mem_privkey,
+				mem_privkey_len, HITLS_CFG_LoadKeyBuffer);
+		if (ret != HITLS_SUCCESS) {
+			lwsl_err("%s: HITLS_CFG_LoadKeyBuffer failed: 0x%x\n",
+				 __func__, ret);
+			return -1;
+		}
+	} else if (cert && private_key) {
+		ret = HITLS_CFG_LoadCertFile(config, cert, TLS_PARSE_FORMAT_PEM);
+		if (ret != HITLS_SUCCESS) {
+			lwsl_err("%s: HITLS_CFG_LoadCertFile failed: 0x%x\n",
+				 __func__, ret);
+			return -1;
+		}
+
+		ret = HITLS_CFG_LoadKeyFile(config, private_key,
+					    TLS_PARSE_FORMAT_PEM);
+		if (ret != HITLS_SUCCESS) {
+			lwsl_err("%s: HITLS_CFG_LoadKeyFile failed: 0x%x\n",
+				 __func__, ret);
+			return -1;
+		}
+	} else
+		return 0;
+
+	ret = HITLS_CFG_CheckPrivateKey(config);
+	if (ret != HITLS_SUCCESS) {
+		lwsl_err("%s: HITLS_CFG_CheckPrivateKey failed: 0x%x\n",
+			 __func__, ret);
+		return -1;
+	}
+
+	return 0;
+}
+
 int
 lws_tls_server_vhost_backend_init(const struct lws_context_creation_info *info,
 				  struct lws_vhost *vhost, struct lws *wsi)
@@ -214,14 +283,18 @@ lws_tls_server_vhost_backend_init(const struct lws_context_creation_info *info,
 	HITLS_Config *config;
 	uint16_t suites[64];
 	size_t suites_count = 0;
-	int cert_set = 0, key_set = 0;
+	int cert_mode;
 	int ret;
 
 	(void)wsi;
 
+	if (!vhost->tls.use_ssl ||
+	    (!info->ssl_cert_filepath && !info->server_ssl_cert_mem))
+		return 0;
+
 	ctx = lws_zalloc(sizeof(*ctx), __func__);
 	if (!ctx)
-		return -1;
+		return 1;
 
 	/* Create full TLS config so options_set/clear version mapping can apply */
 	config = HITLS_CFG_NewTLSConfig();
@@ -241,7 +314,16 @@ lws_tls_server_vhost_backend_init(const struct lws_context_creation_info *info,
 	ctx->config = config;
 	lws_ssl_bind_passphrase(ctx, 0, info);
 
-	if (HITLS_CFG_SetServerNameCb(config, lws_openhitls_server_name_cb)
+	if (vhost->context->keylog_file[0]) {
+		ret = HITLS_CFG_SetKeyLogCb(config, lws_openhitls_klog_dump);
+		if (ret != HITLS_SUCCESS) {
+			lwsl_err("%s: HITLS_CFG_SetKeyLogCb failed: 0x%x\n",
+				 __func__, ret);
+			goto bail_cfg;
+		}
+	}
+
+	if (HITLS_CFG_SetServerNameCb(config, lws_ssl_server_name_cb)
 			!= HITLS_SUCCESS) {
 		lwsl_err("%s: HITLS_CFG_SetServerNameCb failed\n", __func__);
 		goto bail_cfg;
@@ -249,14 +331,6 @@ lws_tls_server_vhost_backend_init(const struct lws_context_creation_info *info,
 
 	if (HITLS_CFG_SetServerNameArg(config, vhost->context) != HITLS_SUCCESS) {
 		lwsl_err("%s: HITLS_CFG_SetServerNameArg failed\n", __func__);
-		goto bail_cfg;
-	}
-
-	if (lws_openhitls_apply_ssl_options(config, info->ssl_options_set,
-					    info->ssl_options_clear,
-					    "server")) {
-		lwsl_err("%s: failed to apply ssl_options_set/clear\n",
-			 __func__);
 		goto bail_cfg;
 	}
 
@@ -309,71 +383,53 @@ lws_tls_server_vhost_backend_init(const struct lws_context_creation_info *info,
 		}
 	}
 
-	/* Load certificate */
-	if (info->server_ssl_cert_mem) {
-		lwsl_notice("%s: loading cert from memory (%u bytes)\n", __func__,
-			    (unsigned int)info->server_ssl_cert_mem_len);
-		ret = lws_openhitls_cfg_load_buffer_autofmt(config,
+	cert_mode = (int)lws_tls_generic_cert_checks(vhost,
+					info->ssl_cert_filepath,
+					info->ssl_private_key_filepath);
+	if (!info->ssl_cert_filepath && !info->ssl_private_key_filepath)
+		cert_mode = LWS_TLS_EXTANT_ALTERNATIVE;
+
+	if (cert_mode == LWS_TLS_EXTANT_NO &&
+	    (!info->server_ssl_cert_mem || !info->server_ssl_private_key_mem))
+		goto done_ctx;
+	if (cert_mode == LWS_TLS_EXTANT_NO)
+		cert_mode = LWS_TLS_EXTANT_ALTERNATIVE;
+
+	if (cert_mode == LWS_TLS_EXTANT_ALTERNATIVE &&
+	    (!info->server_ssl_cert_mem || !info->server_ssl_private_key_mem)) {
+		lwsl_err("%s: incomplete alternative cert/key at init\n",
+			 __func__);
+		goto bail_cfg;
+	}
+
+	if ((!!info->ssl_cert_filepath != !!info->ssl_private_key_filepath) ||
+	    (!!info->server_ssl_cert_mem != !!info->server_ssl_private_key_mem)) {
+		lwsl_err("%s: server cert/key must be configured as a pair\n",
+			 __func__);
+		goto bail_cfg;
+	}
+
+	if (cert_mode == LWS_TLS_EXTANT_ALTERNATIVE) {
+		lwsl_notice("%s: loading cert/key from memory\n", __func__);
+		if (lws_openhitls_cfg_load_certkey_pair(config, NULL, NULL,
 				info->server_ssl_cert_mem,
 				info->server_ssl_cert_mem_len,
-				HITLS_CFG_LoadCertBuffer);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_LoadCertBuffer failed: 0x%x\n",
-				 __func__, ret);
+				info->server_ssl_private_key_mem,
+				info->server_ssl_private_key_mem_len))
 			goto bail_cfg;
-		}
-		cert_set = 1;
-	} else if (info->ssl_cert_filepath) {
-		/* Load from file */
+	} else if (cert_mode == LWS_TLS_EXTANT_YES) {
 		lwsl_notice("%s: loading cert from %s\n", __func__,
 			    info->ssl_cert_filepath);
-		ret = HITLS_CFG_LoadCertFile(config, info->ssl_cert_filepath,
-					     TLS_PARSE_FORMAT_PEM);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_LoadCertFile failed: 0x%x\n",
-				 __func__, ret);
-			goto bail_cfg;
-		}
-		cert_set = 1;
-	}
-
-	/* Load private key */
-	if (info->server_ssl_private_key_mem) {
-		ret = lws_openhitls_cfg_load_buffer_autofmt(config,
-				info->server_ssl_private_key_mem,
-				info->server_ssl_private_key_mem_len,
-				HITLS_CFG_LoadKeyBuffer);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_LoadKeyBuffer failed: 0x%x\n",
-				 __func__, ret);
-			goto bail_cfg;
-		}
-		key_set = 1;
-	} else if (info->ssl_private_key_filepath) {
 		lwsl_notice("%s: loading key from %s\n", __func__,
 			    info->ssl_private_key_filepath);
-		ret = HITLS_CFG_LoadKeyFile(config, info->ssl_private_key_filepath,
-					    TLS_PARSE_FORMAT_PEM);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_LoadKeyFile failed: 0x%x\n",
-				 __func__, ret);
+		if (lws_openhitls_cfg_load_certkey_pair(config,
+				info->ssl_cert_filepath,
+				info->ssl_private_key_filepath,
+				NULL, 0, NULL, 0))
 			goto bail_cfg;
-		}
-		key_set = 1;
 	}
 
-	if (cert_set && key_set) {
-		ret = HITLS_CFG_CheckPrivateKey(config);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_CheckPrivateKey failed: 0x%x\n",
-				 __func__, ret);
-			goto bail_cfg;
-		}
-	} else if (cert_set || key_set) {
-		lwsl_warn("%s: partial cert/key configured at init, expecting completion by callback\n",
-			  __func__);
-	}
-
+done_ctx:
 	vhost->tls.ssl_ctx = ctx;
 
 	return 0;
@@ -382,7 +438,7 @@ bail_cfg:
 	HITLS_CFG_FreeConfig(config);
 bail:
 	lws_free(ctx);
-	return -1;
+	return 1;
 }
 
 int
@@ -410,6 +466,13 @@ lws_tls_server_new_nonblocking(struct lws *wsi, lws_sockfd_type accept_fd)
 
 	if (HITLS_SetUserData(ssl, wsi) != HITLS_SUCCESS) {
 		lwsl_err("%s: HITLS_SetUserData failed\n", __func__);
+		HITLS_Free(ssl);
+		return 1;
+	}
+
+	if (wsi->a.vhost->tls.ssl_info_event_mask &&
+	    HITLS_SetInfoCb(ssl, lws_ssl_info_callback) != HITLS_SUCCESS) {
+		lwsl_err("%s: HITLS_SetInfoCb failed\n", __func__);
 		HITLS_Free(ssl);
 		return 1;
 	}
@@ -445,69 +508,69 @@ lws_tls_server_certs_load(struct lws_vhost *vhost, struct lws *wsi,
 			  const char *mem_privkey, size_t mem_privkey_len)
 {
 	lws_tls_ctx *ctx;
-	int ret;
-	int cert_set = 0, key_set = 0;
+	HITLS_Config *verify_cfg;
+	int n;
 
 	(void)wsi;
 
 	if (!vhost->tls.ssl_ctx)
-		return -1;
+		return 1;
 
 	ctx = (lws_tls_ctx *)vhost->tls.ssl_ctx;
 	if (!ctx->config)
-		return -1;
+		return 1;
 
-	if (mem_cert && len_mem_cert) {
-		ret = lws_openhitls_cfg_load_buffer_autofmt(ctx->config, mem_cert,
-				len_mem_cert, HITLS_CFG_LoadCertBuffer);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_LoadCertBuffer failed: 0x%x\n",
-				 __func__, ret);
-			return -1;
-		}
-		cert_set = 1;
-	} else if (cert) {
-		/* Load certificate from file */
-		ret = HITLS_CFG_LoadCertFile(ctx->config, cert,
-					     TLS_PARSE_FORMAT_PEM);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_LoadCertFile failed: 0x%x\n",
-				 __func__, ret);
-			return -1;
-		}
-		cert_set = 1;
+	n = (int)lws_tls_generic_cert_checks(vhost, cert, private_key);
+	if (!cert && !private_key)
+		n = LWS_TLS_EXTANT_ALTERNATIVE;
+
+	if (n == LWS_TLS_EXTANT_NO && (!mem_cert || !mem_privkey))
+		return 0;
+	if (n == LWS_TLS_EXTANT_NO)
+		n = LWS_TLS_EXTANT_ALTERNATIVE;
+
+	if (n == LWS_TLS_EXTANT_ALTERNATIVE && (!mem_cert || !mem_privkey)) {
+		lwsl_err("%s: incomplete alternative cert/key update\n",
+			 __func__);
+		return 1;
 	}
 
-	if (mem_privkey && mem_privkey_len) {
-		ret = lws_openhitls_cfg_load_buffer_autofmt(ctx->config,
-				mem_privkey, mem_privkey_len,
-				HITLS_CFG_LoadKeyBuffer);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_LoadKeyBuffer failed: 0x%x\n",
-				 __func__, ret);
-			return -1;
-		}
-		key_set = 1;
-	} else if (private_key) {
-		/* Load private key from file */
-		ret = HITLS_CFG_LoadKeyFile(ctx->config, private_key,
-					    TLS_PARSE_FORMAT_PEM);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_LoadKeyFile failed: 0x%x\n",
-				 __func__, ret);
-			return -1;
-		}
-		key_set = 1;
+	if ((!!cert != !!private_key) ||
+	    (!!mem_cert != !!mem_privkey) ||
+	    (!!len_mem_cert != !!mem_privkey_len)) {
+		lwsl_err("%s: cert/key updates must be provided as a pair\n",
+			 __func__);
+		return 1;
 	}
 
-	if (cert_set && key_set) {
-		ret = HITLS_CFG_CheckPrivateKey(ctx->config);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_CheckPrivateKey failed: 0x%x\n",
-				 __func__, ret);
-			return -1;
-		}
+	verify_cfg = HITLS_CFG_NewTLSConfig();
+	if (!verify_cfg) {
+		lwsl_err("%s: unable to allocate verification config\n",
+			 __func__);
+		return 1;
 	}
+
+	if (lws_openhitls_cfg_load_certkey_pair(verify_cfg,
+			n == LWS_TLS_EXTANT_YES ? cert : NULL,
+			n == LWS_TLS_EXTANT_YES ? private_key : NULL,
+			n == LWS_TLS_EXTANT_ALTERNATIVE ? mem_cert : NULL,
+			n == LWS_TLS_EXTANT_ALTERNATIVE ? len_mem_cert : 0,
+			n == LWS_TLS_EXTANT_ALTERNATIVE ? mem_privkey : NULL,
+			n == LWS_TLS_EXTANT_ALTERNATIVE ? mem_privkey_len : 0)) {
+		HITLS_CFG_FreeConfig(verify_cfg);
+		return 1;
+	}
+
+	HITLS_CFG_FreeConfig(verify_cfg);
+
+	if (lws_openhitls_cfg_load_certkey_pair(ctx->config,
+			n == LWS_TLS_EXTANT_YES ? cert : NULL,
+			n == LWS_TLS_EXTANT_YES ? private_key : NULL,
+			n == LWS_TLS_EXTANT_ALTERNATIVE ? mem_cert : NULL,
+			n == LWS_TLS_EXTANT_ALTERNATIVE ? len_mem_cert : 0,
+			n == LWS_TLS_EXTANT_ALTERNATIVE ? mem_privkey : NULL,
+			n == LWS_TLS_EXTANT_ALTERNATIVE ? mem_privkey_len : 0))
+		return 1;
 
 	return 0;
 }
@@ -543,7 +606,7 @@ lws_tls_server_client_cert_verify_config(struct lws_vhost *vh)
 		return -1;
 	}
 
-	if (HITLS_CFG_SetVerifyCb(ctx->config, lws_openhitls_server_verify_cb)
+	if (HITLS_CFG_SetVerifyCb(ctx->config, OpenHiTLS_verify_callback)
 			!= HITLS_SUCCESS) {
 		lwsl_err("%s: HITLS_CFG_SetVerifyCb failed\n", __func__);
 		return -1;
@@ -1317,4 +1380,71 @@ cleanup:
 
 	return 1;
 #endif
+}
+
+enum lws_ssl_capable_status
+lws_tls_server_abort_connection(struct lws *wsi)
+{
+	if (wsi->tls.use_ssl)
+		__lws_tls_shutdown(wsi);
+
+	return LWS_SSL_CAPABLE_DONE;
+}
+
+enum lws_ssl_capable_status
+lws_tls_server_accept(struct lws *wsi)
+{
+	int ret, m;
+
+	if (!wsi->tls.ssl)
+		return LWS_SSL_CAPABLE_ERROR;
+
+	lws_openhitls_verify_bind(wsi->tls.ssl);
+	ret = HITLS_Accept(wsi->tls.ssl);
+	lws_openhitls_verify_unbind();
+
+	wsi->skip_fallback = 1;
+
+	if (ret == HITLS_SUCCESS) {
+
+#if !defined(LWS_WITH_NO_LOGS)
+		/* OpenHiTLS does not have equivalent cipher description API */
+#endif
+
+		if (lws_openhitls_pending_bytes(wsi) &&
+		    lws_dll2_is_detached(&wsi->tls.dll_pending_tls))
+			lws_dll2_add_head(&wsi->tls.dll_pending_tls,
+					  &wsi->a.context->pt[(int)wsi->tsi].
+					  tls.dll_pending_tls_owner);
+
+		return LWS_SSL_CAPABLE_DONE;
+	}
+
+	lwsl_debug("%s: HITLS_Accept returned 0x%x\n", __func__, ret);
+	m = lws_ssl_get_error(wsi, ret);
+
+	if (m == LWS_SSL_CAPABLE_ERROR)
+		return LWS_SSL_CAPABLE_ERROR;
+
+	if (m == LWS_SSL_CAPABLE_MORE_SERVICE_READ) {
+		if (lws_change_pollfd(wsi, 0, LWS_POLLIN)) {
+			lwsl_info("%s: WANT_READ change_pollfd failed\n",
+				  __func__);
+			return LWS_SSL_CAPABLE_ERROR;
+		}
+
+		return LWS_SSL_CAPABLE_MORE_SERVICE_READ;
+	}
+	if (m == LWS_SSL_CAPABLE_MORE_SERVICE_WRITE) {
+		lwsl_debug("%s: WANT_WRITE\n", __func__);
+
+		if (lws_change_pollfd(wsi, 0, LWS_POLLOUT)) {
+			lwsl_info("%s: WANT_WRITE change_pollfd failed\n",
+				  __func__);
+			return LWS_SSL_CAPABLE_ERROR;
+		}
+		return LWS_SSL_CAPABLE_MORE_SERVICE_WRITE;
+	}
+
+	return LWS_SSL_CAPABLE_ERROR;
 }

@@ -24,17 +24,23 @@
 
 #include "private-lib-core.h"
 #include "private-lib-tls.h"
+#if defined(LWS_WITH_OPENHITLS)
+#include "openhitls/private.h"
+#endif
 
-#if defined(LWS_HAVE_SSL_CTX_set_keylog_callback) && defined(LWS_WITH_NETWORK) && \
-	defined(LWS_WITH_TLS) && !defined(LWS_WITH_MBEDTLS) && \
-	!defined(LWS_WITH_OPENHITLS) && \
-	!defined(LWS_WITH_GNUTLS) && \
+#if defined(LWS_WITH_NETWORK) && defined(LWS_WITH_TLS) && \
 	(!defined(LWS_WITHOUT_CLIENT) || !defined(LWS_WITHOUT_SERVER))
-void
-lws_klog_dump(const SSL *ssl, const char *line)
+#if defined(LWS_WITH_OPENHITLS) || \
+	(defined(LWS_HAVE_SSL_CTX_set_keylog_callback) && \
+	 !defined(LWS_WITH_MBEDTLS) && !defined(LWS_WITH_OPENHITLS))
+#define LWS_WITH_TLS_KEYLOG_SUPPORT
+#endif
+#endif
+
+#if defined(LWS_WITH_TLS_KEYLOG_SUPPORT)
+static void
+lws_klog_dump_wsi(struct lws *wsi, const char *line)
 {
-	struct lws *wsi = (struct lws *)SSL_get_ex_data(ssl,
-					  openssl_websocket_private_data_index);
 	char path[128], hdr[128], ts[64];
 	size_t w = 0, wx = 0;
 	int fd, t;
@@ -82,11 +88,34 @@ lws_klog_dump(const SSL *ssl, const char *line)
 }
 #endif
 
+#if defined(LWS_HAVE_SSL_CTX_set_keylog_callback) && defined(LWS_WITH_NETWORK) && \
+	defined(LWS_WITH_TLS) && !defined(LWS_WITH_MBEDTLS) && \
+	!defined(LWS_WITH_OPENHITLS) && \
+	(!defined(LWS_WITHOUT_CLIENT) || !defined(LWS_WITHOUT_SERVER))
+void
+lws_klog_dump(const SSL *ssl, const char *line)
+{
+	struct lws *wsi = (struct lws *)SSL_get_ex_data(
+			ssl, openssl_websocket_private_data_index);
+
+	lws_klog_dump_wsi(wsi, line);
+}
+#endif
+
+#if defined(LWS_WITH_OPENHITLS) && defined(LWS_WITH_NETWORK) && \
+	defined(LWS_WITH_TLS) && \
+	(!defined(LWS_WITHOUT_CLIENT) || !defined(LWS_WITHOUT_SERVER))
+void
+lws_openhitls_klog_dump(HITLS_Ctx *ctx, const char *line)
+{
+	lws_klog_dump_wsi((struct lws *)HITLS_GetUserData(ctx), line);
+}
+#endif
+
 
 #if defined(LWS_WITH_NETWORK)
-#if (!defined(LWS_WITH_MBEDTLS) && !defined(LWS_WITH_OPENHITLS) && \
-	 !defined(LWS_WITH_SCHANNEL) && defined(OPENSSL_VERSION_NUMBER) && \
-					  OPENSSL_VERSION_NUMBER >= 0x10002000L)
+#if (!defined(LWS_WITH_MBEDTLS) && !defined(LWS_WITH_OPENHITLS) && defined(OPENSSL_VERSION_NUMBER) && \
+				  OPENSSL_VERSION_NUMBER >= 0x10002000L)
 static int
 alpn_cb(SSL *s, const unsigned char **out, unsigned char *outlen,
 	const unsigned char *in, unsigned int inlen, void *arg)
@@ -101,6 +130,47 @@ alpn_cb(SSL *s, const unsigned char **out, unsigned char *outlen,
 #endif
 
 	return SSL_TLSEXT_ERR_OK;
+}
+#endif
+
+#if defined(LWS_WITH_OPENHITLS)
+static int32_t
+alpn_cb_openhitls(HITLS_Ctx *ctx, uint8_t **selectedProto,
+		  uint8_t *selectedProtoLen, uint8_t *clientAlpnList,
+		  uint32_t clientAlpnListSize, void *arg)
+{
+	const struct alpn_ctx *alpn_ctx = (const struct alpn_ctx *)arg;
+	int32_t ret;
+
+	(void)ctx;
+
+	if (!selectedProto || !selectedProtoLen || !alpn_ctx ||
+	    !alpn_ctx->len)
+		return HITLS_ALPN_ERR_ALERT_FATAL;
+
+	if (!clientAlpnList || !clientAlpnListSize)
+		return HITLS_ALPN_ERR_NOACK;
+
+	*selectedProto = NULL;
+	*selectedProtoLen = 0;
+
+	ret = HITLS_SelectAlpnProtocol(selectedProto, selectedProtoLen,
+				       alpn_ctx->data, alpn_ctx->len,
+				       clientAlpnList, clientAlpnListSize);
+	if (ret == HITLS_SUCCESS)
+		return (*selectedProto && *selectedProtoLen) ?
+				HITLS_ALPN_ERR_OK : HITLS_ALPN_ERR_NOACK;
+
+	if (ret == HITLS_NULL_INPUT || ret == HITLS_CONFIG_INVALID_LENGTH) {
+		lwsl_err("%s: OpenHiTLS ALPN select failed: 0x%x\n",
+			 __func__, (unsigned int)ret);
+		return HITLS_ALPN_ERR_ALERT_FATAL;
+	}
+
+	lwsl_info("%s: OpenHiTLS ALPN had no protocol match: 0x%x\n",
+		  __func__, (unsigned int)ret);
+
+	return HITLS_ALPN_ERR_NOACK;
 }
 #endif
 
@@ -216,7 +286,6 @@ lws_context_init_alpn(struct lws_vhost *vhost)
 {
 #if defined(LWS_WITH_MBEDTLS) || (defined(OPENSSL_VERSION_NUMBER) && \
 				  OPENSSL_VERSION_NUMBER >= 0x10002000L) || \
-				  defined(LWS_WITH_GNUTLS) || \
 				  defined(LWS_WITH_OPENHITLS)
 	const char *alpn_comma = vhost->context->tls.alpn_default;
 
@@ -230,21 +299,33 @@ lws_context_init_alpn(struct lws_vhost *vhost)
 					vhost->tls.alpn_ctx.data,
 					sizeof(vhost->tls.alpn_ctx.data) - 1);
 
-#if defined(LWS_WITH_GNUTLS)
-	/* GnuTLS ALPN is set per-session, nothing to do here for CTX */
-#elif defined(LWS_WITH_MBEDTLS)
-	/* MbedTLS ALPN is set per-session, nothing to do here for CTX */
+#if defined(LWS_WITH_MBEDTLS)
+		/* MbedTLS ALPN is set per-session, nothing to do here for CTX */
 #elif defined(LWS_WITH_OPENHITLS)
-	/* OpenHiTLS ALPN is set per-session via HITLS_SetAlpnProtos */
+	{
+		HITLS_Config *config =
+			lws_openhitls_server_config_from_ssl_ctx(
+					vhost->tls.ssl_ctx);
+
+		if (!config ||
+		    HITLS_CFG_SetAlpnProtosSelectCb(config,
+						    alpn_cb_openhitls,
+						    &vhost->tls.alpn_ctx) !=
+				    HITLS_SUCCESS)
+			lwsl_err("%s: OpenHiTLS ALPN callback registration failed\n",
+				 __func__);
+	}
 #else
-	SSL_CTX_set_alpn_select_cb(vhost->tls.ssl_ctx, alpn_cb,
-				   &vhost->tls.alpn_ctx);
+		SSL_CTX_set_alpn_select_cb(vhost->tls.ssl_ctx, alpn_cb,
+					   &vhost->tls.alpn_ctx);
 #endif
 #else
-#if !defined(LWS_WITH_SCHANNEL) && !defined(LWS_WITH_GNUTLS) && !defined(LWS_WITH_OPENHITLS)
-	lwsl_err(" HTTP2 / ALPN configured "
-		 "but not supported by OpenSSL 0x%lx\n",
-		 OPENSSL_VERSION_NUMBER);
+#if defined(LWS_WITH_OPENHITLS)
+		lwsl_err(" HTTP2 / ALPN configured but not supported by this OpenHiTLS build\n");
+#else
+		lwsl_err(" HTTP2 / ALPN configured "
+			 "but not supported by OpenSSL 0x%lx\n",
+			 OPENSSL_VERSION_NUMBER);
 #endif
 #endif // OPENSSL_VERSION_NUMBER >= 0x10002000L
 }
@@ -254,7 +335,7 @@ lws_tls_server_conn_alpn(struct lws *wsi)
 {
 #if defined(LWS_WITH_MBEDTLS) || (defined(OPENSSL_VERSION_NUMBER) && \
 				  OPENSSL_VERSION_NUMBER >= 0x10002000L) || \
-				  defined(LWS_WITH_GNUTLS) || defined(LWS_WITH_OPENHITLS)
+				  defined(LWS_WITH_OPENHITLS)
 	const unsigned char *name = NULL;
 	char cstr[10];
 	unsigned int len = 0;
@@ -266,43 +347,36 @@ lws_tls_server_conn_alpn(struct lws *wsi)
 		return 0;
 	}
 
-#if defined(LWS_WITH_GNUTLS)
-	{
-		gnutls_datum_t selected;
-		if (gnutls_alpn_get_selected_protocol((gnutls_session_t)wsi->tls.ssl, &selected) == 0) {
-			name = selected.data;
-			len = selected.size;
+#if defined(LWS_WITH_OPENHITLS)
+		{
+			uint8_t *proto;
+			uint32_t protoLen;
+			if (HITLS_GetSelectedAlpnProto((HITLS_Ctx *)wsi->tls.ssl,
+						       &proto, &protoLen) == HITLS_SUCCESS) {
+				name = proto;
+				len = protoLen;
+			}
 		}
-	}
-#elif defined(LWS_WITH_OPENHITLS)
-	{
-		uint8_t *proto;
-		uint32_t protoLen;
-		if (HITLS_GetSelectedAlpnProto((HITLS_Ctx *)wsi->tls.ssl, &proto, &protoLen) == HITLS_SUCCESS) {
-			name = proto;
-			len = protoLen;
-		}
-	}
 #else
-	SSL_get0_alpn_selected(wsi->tls.ssl, &name, &len);
+		SSL_get0_alpn_selected(wsi->tls.ssl, &name, &len);
 #endif
-	if (!len) {
-		lwsl_info("no ALPN upgrade\n");
-		return 0;
-	}
+		if (!len) {
+			lwsl_info("no ALPN upgrade\n");
+			return 0;
+		}
 
-	if (len > sizeof(cstr) - 1)
-		len = sizeof(cstr) - 1;
+		if (len > sizeof(cstr) - 1)
+			len = sizeof(cstr) - 1;
 
-	memcpy(cstr, name, len);
-	cstr[len] = '\0';
+		memcpy(cstr, name, len);
+		cstr[len] = '\0';
 
-	lwsl_info("%s: negotiated '%s' using ALPN\n", __func__, cstr);
-	wsi->tls.use_ssl |= LCCSCF_USE_SSL;
+		lwsl_info("%s: negotiated '%s' using ALPN\n", __func__, cstr);
+		wsi->tls.use_ssl |= LCCSCF_USE_SSL;
 
-	return lws_role_call_alpn_negotiated(wsi, (const char *)cstr);
+		return lws_role_call_alpn_negotiated(wsi, (const char *)cstr);
 #else
-	lwsl_err("%s: openssl/gnutls too old\n", __func__);
+		lwsl_err("%s: openssl too old\n", __func__);
 #endif
 
 	return 0;
