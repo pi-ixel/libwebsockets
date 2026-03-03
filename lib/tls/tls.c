@@ -27,6 +27,7 @@
 
 #if defined(LWS_HAVE_SSL_CTX_set_keylog_callback) && defined(LWS_WITH_NETWORK) && \
 	defined(LWS_WITH_TLS) && !defined(LWS_WITH_MBEDTLS) && \
+	!defined(LWS_WITH_OPENHITLS) && \
 	!defined(LWS_WITH_GNUTLS) && \
 	(!defined(LWS_WITHOUT_CLIENT) || !defined(LWS_WITHOUT_SERVER))
 void
@@ -83,8 +84,9 @@ lws_klog_dump(const SSL *ssl, const char *line)
 
 
 #if defined(LWS_WITH_NETWORK)
-#if (!defined(LWS_WITH_MBEDTLS) && !defined(LWS_WITH_SCHANNEL) && defined(OPENSSL_VERSION_NUMBER) && \
-				  OPENSSL_VERSION_NUMBER >= 0x10002000L)
+#if (!defined(LWS_WITH_MBEDTLS) && !defined(LWS_WITH_OPENHITLS) && \
+	 !defined(LWS_WITH_SCHANNEL) && defined(OPENSSL_VERSION_NUMBER) && \
+					  OPENSSL_VERSION_NUMBER >= 0x10002000L)
 static int
 alpn_cb(SSL *s, const unsigned char **out, unsigned char *outlen,
 	const unsigned char *in, unsigned int inlen, void *arg)
@@ -214,7 +216,8 @@ lws_context_init_alpn(struct lws_vhost *vhost)
 {
 #if defined(LWS_WITH_MBEDTLS) || (defined(OPENSSL_VERSION_NUMBER) && \
 				  OPENSSL_VERSION_NUMBER >= 0x10002000L) || \
-				  defined(LWS_WITH_GNUTLS)
+				  defined(LWS_WITH_GNUTLS) || \
+				  defined(LWS_WITH_OPENHITLS)
 	const char *alpn_comma = vhost->context->tls.alpn_default;
 
 	if (vhost->tls.alpn)
@@ -231,12 +234,14 @@ lws_context_init_alpn(struct lws_vhost *vhost)
 	/* GnuTLS ALPN is set per-session, nothing to do here for CTX */
 #elif defined(LWS_WITH_MBEDTLS)
 	/* MbedTLS ALPN is set per-session, nothing to do here for CTX */
+#elif defined(LWS_WITH_OPENHITLS)
+	/* OpenHiTLS ALPN is set per-session via HITLS_SetAlpnProtos */
 #else
 	SSL_CTX_set_alpn_select_cb(vhost->tls.ssl_ctx, alpn_cb,
 				   &vhost->tls.alpn_ctx);
 #endif
 #else
-#if !defined(LWS_WITH_SCHANNEL) && !defined(LWS_WITH_GNUTLS)
+#if !defined(LWS_WITH_SCHANNEL) && !defined(LWS_WITH_GNUTLS) && !defined(LWS_WITH_OPENHITLS)
 	lwsl_err(" HTTP2 / ALPN configured "
 		 "but not supported by OpenSSL 0x%lx\n",
 		 OPENSSL_VERSION_NUMBER);
@@ -249,7 +254,7 @@ lws_tls_server_conn_alpn(struct lws *wsi)
 {
 #if defined(LWS_WITH_MBEDTLS) || (defined(OPENSSL_VERSION_NUMBER) && \
 				  OPENSSL_VERSION_NUMBER >= 0x10002000L) || \
-				  defined(LWS_WITH_GNUTLS)
+				  defined(LWS_WITH_GNUTLS) || defined(LWS_WITH_OPENHITLS)
 	const unsigned char *name = NULL;
 	char cstr[10];
 	unsigned int len = 0;
@@ -267,6 +272,15 @@ lws_tls_server_conn_alpn(struct lws *wsi)
 		if (gnutls_alpn_get_selected_protocol((gnutls_session_t)wsi->tls.ssl, &selected) == 0) {
 			name = selected.data;
 			len = selected.size;
+		}
+	}
+#elif defined(LWS_WITH_OPENHITLS)
+	{
+		uint8_t *proto;
+		uint32_t protoLen;
+		if (HITLS_GetSelectedAlpnProto((HITLS_Ctx *)wsi->tls.ssl, &proto, &protoLen) == HITLS_SUCCESS) {
+			name = proto;
+			len = protoLen;
 		}
 	}
 #else

@@ -438,6 +438,14 @@ typedef struct gnutls_session_int SSL;
 typedef struct lws_tls_gnutls_ctx SSL_CTX;
 typedef void BIO;
 typedef struct gnutls_x509_crt_int X509;
+#elif defined(LWS_WITH_OPENHITLS)
+#include <hitls.h>
+struct lws_tls_openhitls_ctx;
+struct lws_tls_openhitls_x509;
+typedef HITLS_Ctx SSL;
+typedef struct lws_tls_openhitls_ctx SSL_CTX;
+typedef void BIO;
+typedef struct lws_tls_openhitls_x509 X509;
 #else
 #include <openssl/ssl.h>
 #if !defined(LWS_WITH_MBEDTLS)

@@ -972,6 +972,8 @@ lws_create_context(const struct lws_context_creation_info *info)
 	context->tls_ops = &tls_ops_schannel;
 #elif defined(LWS_WITH_GNUTLS)
 	context->tls_ops = &tls_ops_gnutls;
+#elif defined(LWS_WITH_OPENHITLS)
+	context->tls_ops = &tls_ops_openhitls;
 #else
 	context->tls_ops = &tls_ops_openssl;
 #endif

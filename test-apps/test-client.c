@@ -289,6 +289,7 @@ callback_dumb_increment(struct lws *wsi, enum lws_callback_reasons reason,
 		break;
 
 #if defined(LWS_WITH_TLS) && defined(LWS_HAVE_SSL_CTX_set1_param) && \
+	!defined(LWS_WITH_OPENHITLS) && \
 	!defined(LWS_WITH_MBEDTLS) && !defined(LWS_WITH_GNUTLS)
 	case LWS_CALLBACK_OPENSSL_LOAD_EXTRA_CLIENT_VERIFY_CERTS:
 		if (crl_path[0]) {
@@ -565,7 +566,7 @@ static struct option options[] = {
 	{ "ssl-key",  required_argument,	NULL, 'K' },
 	{ "ssl-ca",  required_argument,		NULL, 'A' },
 #if defined(LWS_WITH_TLS) && defined(LWS_HAVE_SSL_CTX_set1_param)
-	{ "ssl-crl",  required_argument,		NULL, 'R' },
+		{ "ssl-crl",  required_argument,		NULL, 'R' },
 #endif
 	{ NULL, 0, 0, 0 }
 };

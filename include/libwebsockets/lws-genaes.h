@@ -37,6 +37,9 @@
 #include <mbedtls/aes.h>
 #include <mbedtls/gcm.h>
 #endif
+#if defined(LWS_WITH_OPENHITLS)
+#include <crypt_eal_cipher.h>
+#endif
 
 enum enum_aes_modes {
 	LWS_GAESM_CBC,
