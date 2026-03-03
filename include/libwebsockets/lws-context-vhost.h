@@ -562,13 +562,13 @@ struct lws_context_creation_info {
 
 #endif
 
-#if !defined(LWS_WITH_MBEDTLS)
+#if !defined(LWS_WITH_MBEDTLS) && !defined(LWS_WITH_OPENHITLS)
 	SSL_CTX *provided_client_ssl_ctx;
-	/**< CONTEXT: If non-null, swap out libwebsockets ssl
-	  * implementation for the one provided by provided_ssl_ctx.
-	  * Libwebsockets no longer is responsible for freeing the context
-	  * if this option is selected. */
-#else /* WITH_MBEDTLS */
+	/**< CONTEXT: OpenSSL backend only. If non-null, swap out
+	 * libwebsockets client TLS context creation for the one provided here.
+	 * Libwebsockets no longer is responsible for freeing the context if this
+	 * option is selected. */
+#elif defined(LWS_WITH_MBEDTLS)
 	const char *mbedtls_client_preload_filepath;
 	/**< CONTEXT: If NULL, no effect.  Otherwise it should point to a
 	 * filepath where every created client SSL_CTX is preloaded from the

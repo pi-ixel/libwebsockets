@@ -293,8 +293,9 @@ lws_client_connect_via_info(const struct lws_client_connect_info *ccinfo);
  *
  *	 - options must have LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT set,
  *	     otherwise the call does nothing
- *	 - provided_client_ssl_ctx must be NULL to get a generated client
- *	     ssl context, otherwise you can pass a prepared one in by setting it
+ *	 - on OpenSSL builds, provided_client_ssl_ctx may be used to pass a
+ *	     prepared client ssl context; on other TLS backends lws generates
+ *	     the client context itself
  *	 - ssl_cipher_list may be NULL or set to the client valid cipher list
  *	 - ssl_ca_filepath may be NULL or client cert filepath
  *	 - ssl_cert_filepath may be NULL or client cert filepath

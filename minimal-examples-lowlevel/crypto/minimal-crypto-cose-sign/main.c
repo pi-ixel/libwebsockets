@@ -8,6 +8,7 @@
  */
 
 #include <libwebsockets.h>
+#include <stdio.h>
 #include <sys/types.h>
 #include <fcntl.h>
 

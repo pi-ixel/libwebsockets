@@ -457,56 +457,6 @@ lws_x509_info(struct lws_x509_cert *x509, enum lws_tls_cert_info type,
 	return lws_tls_openhitls_cert_info(x509->cert, type, buf, len);
 }
 
-#if defined(LWS_WITH_NETWORK)
-int
-lws_tls_vhost_cert_info(struct lws_vhost *vhost, enum lws_tls_cert_info type,
-		        union lws_tls_cert_info_results *buf, size_t len)
-{
-	/* TODO: Implement when TLS context management is available */
-	lwsl_notice("%s: not yet implemented\n", __func__);
-	return -1;
-}
-
-int
-lws_tls_peer_cert_info(struct lws *wsi, enum lws_tls_cert_info type, union lws_tls_cert_info_results *buf, size_t len)
-{
-	HITLS_CERT_X509 *peer_cert;
-	HITLS_ERROR verify_result = HITLS_X509_V_OK;
-	int ret = -1;
-
-	wsi = lws_get_network_wsi(wsi);
-
-	if (!wsi || !wsi->tls.ssl)
-		return -1;
-
-	peer_cert = HITLS_GetPeerCertificate(wsi->tls.ssl);
-	if (!peer_cert) {
-		lwsl_debug("%s: no peer cert\n", __func__);
-		return -1;
-	}
-
-	switch (type) {
-	case LWS_TLS_CERT_INFO_VERIFIED:
-		if (HITLS_GetVerifyResult(wsi->tls.ssl, &verify_result) != HITLS_SUCCESS) {
-			ret = -1;
-			break;
-		}
-
-		buf->verified = verify_result == HITLS_X509_V_OK;
-		ret = 0;
-		break;
-
-	default:
-		ret = lws_tls_openhitls_cert_info((HITLS_X509_Cert *)peer_cert, type, buf, len);
-		break;
-	}
-
-	HITLS_X509_CertFree((HITLS_X509_Cert *)peer_cert);
-
-	return ret;
-}
-#endif
-
 int
 lws_x509_create(struct lws_x509_cert **x509)
 {
@@ -915,9 +865,10 @@ lws_x509_public_to_jwk(struct lws_jwk *jwk, struct lws_x509_cert *x509, const ch
 			goto bail1;
 		}
 		curve_id = CRYPT_EAL_PkeyGetParaId(pubkey);
-		if (lws_genec_confirm_curve_allowed_by_tls_id(curves, curve_id, jwk)) {
-			goto bail1;
-		}
+			if (lws_genec_confirm_curve_allowed_by_tls_id(curves,
+					(int)curve_id, jwk)) {
+				goto bail1;
+			}
 		curve = lws_genec_curve(lws_ec_curves, (char *)jwk->e[LWS_GENCRYPTO_EC_KEYEL_CRV].buf);
 		if (!curve) {
 			lwsl_err("%s: curve not found\n", __func__);

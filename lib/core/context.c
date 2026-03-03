@@ -940,18 +940,22 @@ lws_create_context(const struct lws_context_creation_info *info)
 		goto free_context_fail2;
 
 #if defined(LWS_WITH_TLS) && defined(LWS_WITH_NETWORK)
-#if defined(LWS_WITH_MBEDTLS)
-	context->tls_ops = &tls_ops_mbedtls;
+	#if defined(LWS_WITH_MBEDTLS)
+		context->tls_ops = &tls_ops_mbedtls;
 
-	mbedtls_client_preload_filepath = info->mbedtls_client_preload_filepath;
-#else
-	context->tls_ops = &tls_ops_openssl;
-#endif
-#endif
+		mbedtls_client_preload_filepath = info->mbedtls_client_preload_filepath;
+	#else
+	#if defined(LWS_WITH_OPENHITLS)
+		context->tls_ops = &tls_ops_openhitls;
+	#else
+		context->tls_ops = &tls_ops_openssl;
+	#endif
+	#endif
+	#endif
 
-#if defined(LWS_WITH_NETWORK) && LWS_MAX_SMP > 1
-	lws_mutex_refcount_init(&context->mr);
-#endif
+	#if defined(LWS_WITH_NETWORK) && LWS_MAX_SMP > 1
+		lws_mutex_refcount_init(&context->mr);
+	#endif
 
 #if defined(LWS_PLAT_FREERTOS)
 #if defined(LWS_AMAZON_RTOS)
