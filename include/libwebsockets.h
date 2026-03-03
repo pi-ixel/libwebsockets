@@ -333,6 +333,16 @@ typedef int suseconds_t;
 #endif
 
 #endif
+#elif defined(LWS_WITH_OPENHITLS)
+#include <hitls.h>
+#include <hitls_cert_type.h>
+struct lws_tls_openhitls_ctx;
+struct lws_tls_openhitls_x509;
+typedef HITLS_Ctx SSL;
+typedef struct lws_tls_openhitls_ctx SSL_CTX;
+typedef void BIO;
+typedef struct lws_tls_openhitls_x509 X509;
+typedef HITLS_CERT_StoreCtx X509_STORE_CTX;
 #else
 #include <openssl/ssl.h>
 #if !defined(LWS_WITH_MBEDTLS)

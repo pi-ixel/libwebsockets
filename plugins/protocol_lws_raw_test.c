@@ -73,6 +73,7 @@
 #define LWS_INTERNAL
 #endif
 #include <libwebsockets.h>
+#include <stdio.h>
 #endif
 
 #include <string.h>

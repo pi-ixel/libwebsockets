@@ -35,6 +35,10 @@
 
 /* include/libwebsockets/lws-jwk.h must be included before this */
 
+#if defined(LWS_WITH_OPENHITLS)
+#include <crypt_eal_pkey.h>
+#endif
+
 enum enum_genrsa_mode {
 	LGRSAM_PKCS1_1_5,
 	LGRSAM_PKCS1_OAEP_PSS,
@@ -45,6 +49,10 @@ enum enum_genrsa_mode {
 struct lws_genrsa_ctx {
 #if defined(LWS_WITH_MBEDTLS)
 	mbedtls_rsa_context *ctx;
+#elif defined(LWS_WITH_OPENHITLS)
+	CRYPT_EAL_PkeyCtx *ctx;
+	CRYPT_EAL_PkeyPub pub;
+	CRYPT_EAL_PkeyPrv prv;
 #else
 	BIGNUM *bn[LWS_GENCRYPTO_RSA_KEYEL_COUNT];
 	EVP_PKEY_CTX *ctx;
@@ -52,6 +60,7 @@ struct lws_genrsa_ctx {
 #endif
 	struct lws_context *context;
 	enum enum_genrsa_mode mode;
+	enum lws_genhash_types oaep_hashid;
 };
 
 /** lws_genrsa_public_decrypt_create() - Create RSA public decrypt context

@@ -45,6 +45,16 @@ if (LWS_WITH_CYASSL)
 	set(LWS_WOLFSSL_INCLUDE_DIRS ${LWS_CYASSL_INCLUDE_DIRS} CACHE PATH "Path to wolfSSL/CyaSSL header files" FORCE PARENT_SCOPE)
 endif()
 
+if (LWS_WITH_OPENHITLS)
+	include(FindOpenHITLS)
+	if (OPENHITLS_UNSUPPORTED_PLATFORM)
+		message(FATAL_ERROR "OpenHITLS is not supported on this platform.")
+	elseif (NOT OPENHITLS_FOUND)
+		message(FATAL_ERROR "OpenHITLS is selected but not available. Set OPENHITLS_LIBRARIES and OPENHITLS_INCLUDE_DIRS.")
+	endif()
+	set(LWS_WITH_TLS 1 PARENT_SCOPE)
+endif()
+
 set(LWS_OPENSSL_LIBRARIES CACHE PATH "Path to the OpenSSL library" )
 set(LWS_OPENSSL_INCLUDE_DIRS CACHE PATH "Path to the OpenSSL include directory" )
 set(LWS_WOLFSSL_LIBRARIES CACHE PATH "Path to the wolfSSL library" )
@@ -56,7 +66,7 @@ if (LWS_WITH_BORINGSSL OR LWS_WITH_AWSLC)
 	set (LWS_WITH_GENHASH OFF PARENT_SCOPE)
 endif()
 
-if (LWS_WITH_SSL AND NOT LWS_WITH_WOLFSSL AND NOT LWS_WITH_MBEDTLS)
+if (LWS_WITH_SSL AND NOT LWS_WITH_WOLFSSL AND NOT LWS_WITH_MBEDTLS AND NOT LWS_WITH_OPENHITLS)
 	if ("${LWS_OPENSSL_LIBRARIES}" STREQUAL "" OR "${LWS_OPENSSL_INCLUDE_DIRS}" STREQUAL "")
 	else()
 		if (NOT LWS_PLAT_FREERTOS)
@@ -155,6 +165,29 @@ if (LWS_WITH_SSL)
 				tls/mbedtls/lws-genec.c
 				tls/mbedtls/lws-gencrypto.c)
 		endif()
+	elseif (LWS_WITH_OPENHITLS)
+		list(APPEND SOURCES
+			tls/openhitls/openhitls-tls.c
+			tls/openhitls/openhitls-session.c
+			tls/openhitls/openhitls-ssl.c
+			tls/openhitls/openhitls-x509.c)
+		if (NOT LWS_WITHOUT_SERVER)
+			list(APPEND SOURCES
+				tls/openhitls/openhitls-server.c)
+		endif()
+		if (NOT LWS_WITHOUT_CLIENT)
+			list(APPEND SOURCES
+				tls/openhitls/openhitls-client.c)
+		endif()
+		if (LWS_WITH_GENCRYPTO)
+			list(APPEND SOURCES
+				tls/openhitls/lws-genhash.c
+				tls/openhitls/lws-genrsa.c
+				tls/openhitls/lws-genaes.c
+				tls/lws-genec-common.c
+				tls/openhitls/lws-genec.c
+				tls/openhitls/lws-gencrypto.c)
+		endif()
 	else()
 		list(APPEND SOURCES
 			tls/openssl/openssl-tls.c
@@ -184,6 +217,8 @@ if (LWS_WITH_SSL)
 		if (LWS_WITH_MBEDTLS)
 			list(APPEND SOURCES
 				tls/mbedtls/mbedtls-server.c)
+		elseif (LWS_WITH_OPENHITLS)
+			# OpenHITLS backend provides server entrypoints in openhitls-server.c
 		else()
 			list(APPEND SOURCES
 				tls/openssl/openssl-server.c)
@@ -195,6 +230,8 @@ if (LWS_WITH_SSL)
 		if (LWS_WITH_MBEDTLS)
 			list(APPEND SOURCES
 				tls/mbedtls/mbedtls-client.c)
+		elseif (LWS_WITH_OPENHITLS)
+			# OpenHITLS backend provides client entrypoints in openhitls-client.c
 		else()
 			list(APPEND SOURCES
 				tls/openssl/openssl-client.c)
@@ -260,6 +297,65 @@ if (LWS_WITH_SSL)
 		set(chose_ssl 1)
 	endif()
 
+	if (LWS_WITH_OPENHITLS)
+		message("OpenHITLS include dir: ${OPENHITLS_INCLUDE_DIRS}")
+		message("OpenHITLS libraries: ${OPENHITLS_LIBRARIES}")
+		if (OPENHITLS_INCLUDE_DIRS)
+			set(LWS_PUBLIC_INCLUDES ${LWS_PUBLIC_INCLUDES} "${OPENHITLS_INCLUDE_DIRS}")
+			# Add the subdirectories that OpenHiTLS headers need
+			if (EXISTS "${OPENHITLS_INCLUDE_DIRS}/bsl")
+				set(LWS_PUBLIC_INCLUDES ${LWS_PUBLIC_INCLUDES} "${OPENHITLS_INCLUDE_DIRS}/bsl")
+			endif()
+			if (EXISTS "${OPENHITLS_INCLUDE_DIRS}/crypto")
+				set(LWS_PUBLIC_INCLUDES ${LWS_PUBLIC_INCLUDES} "${OPENHITLS_INCLUDE_DIRS}/crypto")
+			endif()
+			if (EXISTS "${OPENHITLS_INCLUDE_DIRS}/pki")
+				set(LWS_PUBLIC_INCLUDES ${LWS_PUBLIC_INCLUDES} "${OPENHITLS_INCLUDE_DIRS}/pki")
+			endif()
+			if (EXISTS "${OPENHITLS_INCLUDE_DIRS}/tls")
+				set(LWS_PUBLIC_INCLUDES ${LWS_PUBLIC_INCLUDES} "${OPENHITLS_INCLUDE_DIRS}/tls")
+			endif()
+			if (EXISTS "${OPENHITLS_INCLUDE_DIRS}/auth")
+				set(LWS_PUBLIC_INCLUDES ${LWS_PUBLIC_INCLUDES} "${OPENHITLS_INCLUDE_DIRS}/auth")
+			endif()
+			set(LWS_PUBLIC_INCLUDES ${LWS_PUBLIC_INCLUDES} PARENT_SCOPE)
+			# Also add to compiler include path for this build
+			include_directories("${OPENHITLS_INCLUDE_DIRS}")
+			if (EXISTS "${OPENHITLS_INCLUDE_DIRS}/bsl")
+				include_directories("${OPENHITLS_INCLUDE_DIRS}/bsl")
+			endif()
+			if (EXISTS "${OPENHITLS_INCLUDE_DIRS}/crypto")
+				include_directories("${OPENHITLS_INCLUDE_DIRS}/crypto")
+			endif()
+			if (EXISTS "${OPENHITLS_INCLUDE_DIRS}/pki")
+				include_directories("${OPENHITLS_INCLUDE_DIRS}/pki")
+			endif()
+			if (EXISTS "${OPENHITLS_INCLUDE_DIRS}/tls")
+				include_directories("${OPENHITLS_INCLUDE_DIRS}/tls")
+			endif()
+			if (EXISTS "${OPENHITLS_INCLUDE_DIRS}/auth")
+				include_directories("${OPENHITLS_INCLUDE_DIRS}/auth")
+			endif()
+			# Add securec include directory - derive from include dir
+			get_filename_component(OPENHITLS_ROOT_DIR "${OPENHITLS_INCLUDE_DIRS}" DIRECTORY)
+			if (EXISTS "${OPENHITLS_ROOT_DIR}/platform/Secure_C/include")
+				include_directories("${OPENHITLS_ROOT_DIR}/platform/Secure_C/include")
+				set(SECUREC_LIBRARY "${OPENHITLS_ROOT_DIR}/platform/Secure_C/lib/libboundscheck.a")
+			endif()
+		endif()
+		if (NOT LWS_PLAT_FREERTOS)
+			# Add OpenHiTLS libraries first
+			list(INSERT LIB_LIST 0 ${OPENHITLS_LIBRARIES})
+			# Then add securec (boundscheck) library AFTER OpenHiTLS libraries
+			# This is needed because OpenHiTLS libraries reference securec symbols
+			if (DEFINED SECUREC_LIBRARY AND EXISTS "${SECUREC_LIBRARY}")
+				list(APPEND LIB_LIST "${SECUREC_LIBRARY}")
+				message("Adding securec library at end: ${SECUREC_LIBRARY}")
+			endif()
+		endif()
+		set(chose_ssl 1)
+	endif()
+
 	if (NOT chose_ssl)
 		if (OPENSSL_FOUND AND "${OPENSSL_INCLUDE_DIRS}" STREQUAL "")
 			set(OPENSSL_INCLUDE_DIRS "${OPENSSL_INCLUDE_DIR}")
@@ -292,7 +388,7 @@ if (LWS_WITH_SSL)
 			list(INSERT LIB_LIST 0 ${OPENSSL_LIBRARIES})
 		endif()
 
-		if (NOT LWS_WITH_MBEDTLS)
+		if (NOT LWS_WITH_MBEDTLS AND NOT LWS_WITH_OPENHITLS)
 			# older (0.98) Openssl lacks this
 			set(CMAKE_REQUIRED_INCLUDES ${CMAKE_REQUIRED_INCLUDES} ${OPENSSL_INCLUDE_DIRS} PARENT_SCOPE)
 			set(CMAKE_REQUIRED_INCLUDES ${CMAKE_REQUIRED_INCLUDES} ${OPENSSL_INCLUDE_DIRS})
@@ -303,7 +399,7 @@ if (LWS_WITH_SSL)
 			endif()
 		else()
 			unset(LWS_HAVE_OPENSSL_ECDH_H PARENT_SCOPE)
-		endif(NOT LWS_WITH_MBEDTLS)
+		endif()
 	endif()
 
 endif(LWS_WITH_SSL)
@@ -324,6 +420,8 @@ endif()
 if (NOT VARIA)
 	set(VARIA "")
 endif()
+
+if (NOT LWS_WITH_OPENHITLS)
 
 CHECK_FUNCTION_EXISTS(${VARIA}SSL_CTX_set1_param LWS_HAVE_SSL_CTX_set1_param PARENT_SCOPE)
 CHECK_FUNCTION_EXISTS(${VARIA}SSL_set_info_callback LWS_HAVE_SSL_SET_INFO_CALLBACK PARENT_SCOPE)
@@ -361,7 +459,7 @@ CHECK_FUNCTION_EXISTS(${VARIA}SSL_CTX_set_keylog_callback LWS_HAVE_SSL_CTX_set_k
 # deprecated in openssl v3
 CHECK_FUNCTION_EXISTS(${VARIA}EC_KEY_new_by_curve_name LWS_HAVE_EC_KEY_new_by_curve_name PARENT_SCOPE)
 
-if (LWS_WITH_SSL AND NOT LWS_WITH_MBEDTLS)
+if (LWS_WITH_SSL AND NOT LWS_WITH_MBEDTLS AND NOT LWS_WITH_OPENHITLS)
 	# we don't want to confuse what's in or out of the wrapper with
 	# what's in an openssl also installed on the build host
 CHECK_C_SOURCE_COMPILES("#include <openssl/ssl.h>\nint main(void) { STACK_OF(X509) *c = NULL; SSL_CTX *ctx = NULL; return (int)SSL_CTX_get_extra_chain_certs_only(ctx, &c); }\n" LWS_HAVE_SSL_EXTRA_CHAIN_CERTS)
@@ -380,6 +478,7 @@ CHECK_FUNCTION_EXISTS(${VARIA}EVP_aes_128_wrap LWS_HAVE_EVP_aes_128_wrap PARENT_
 CHECK_FUNCTION_EXISTS(${VARIA}EC_POINT_get_affine_coordinates LWS_HAVE_EC_POINT_get_affine_coordinates PARENT_SCOPE)
 CHECK_FUNCTION_EXISTS(${VARIA}SSL_CTX_load_verify_file LWS_HAVE_SSL_CTX_load_verify_file PARENT_SCOPE)
 CHECK_FUNCTION_EXISTS(${VARIA}SSL_CTX_load_verify_dir LWS_HAVE_SSL_CTX_load_verify_dir PARENT_SCOPE)
+	endif()
 endif()
 
 if (LWS_WITH_MBEDTLS)
@@ -422,9 +521,11 @@ if (LWS_WITH_MBEDTLS)
 		CHECK_FUNCTION_EXISTS(mbedtls_rsa_complete LWS_HAVE_mbedtls_rsa_complete PARENT_SCOPE) # not on xenial 2.2
 		CHECK_FUNCTION_EXISTS(mbedtls_internal_aes_encrypt LWS_HAVE_mbedtls_internal_aes_encrypt PARENT_SCOPE) # not on xenial 2.2
 	endif()
+elseif (LWS_WITH_OPENHITLS)
+	set(LWS_HAVE_TLS_CLIENT_METHOD 0 PARENT_SCOPE)
 else()
-CHECK_FUNCTION_EXISTS(${VARIA}TLS_client_method LWS_HAVE_TLS_CLIENT_METHOD PARENT_SCOPE)
-CHECK_FUNCTION_EXISTS(${VARIA}TLSv1_2_client_method LWS_HAVE_TLSV1_2_CLIENT_METHOD PARENT_SCOPE)
+	CHECK_FUNCTION_EXISTS(${VARIA}TLS_client_method LWS_HAVE_TLS_CLIENT_METHOD PARENT_SCOPE)
+	CHECK_FUNCTION_EXISTS(${VARIA}TLSv1_2_client_method LWS_HAVE_TLSV1_2_CLIENT_METHOD PARENT_SCOPE)
 endif()
 
 # Generate self-signed SSL certs for the test-server.
@@ -583,4 +684,3 @@ set(LWS_HAVE_mbedtls_ssl_conf_alpn_protocols ${LWS_HAVE_mbedtls_ssl_conf_alpn_pr
 set(TEST_SERVER_SSL_KEY "${TEST_SERVER_SSL_KEY}" PARENT_SCOPE)
 set(TEST_SERVER_SSL_CERT "${TEST_SERVER_SSL_CERT}" PARENT_SCOPE)
 set(TEST_SERVER_DATA ${TEST_SERVER_DATA} PARENT_SCOPE)
-

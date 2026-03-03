@@ -15,6 +15,7 @@
  */
 
 #include <libwebsockets.h>
+#include <stdio.h>
 
 typedef struct {
 	lws_dll2_t		list;
