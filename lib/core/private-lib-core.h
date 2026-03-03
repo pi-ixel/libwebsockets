@@ -455,8 +455,9 @@ struct lws_context {
  #if defined(LWS_WITH_SERVER)
 	char canonical_hostname[96];
  #endif
-#if defined(LWS_HAVE_SSL_CTX_set_keylog_callback) && \
-	defined(LWS_WITH_TLS) && (!defined(LWS_WITHOUT_CLIENT) || !defined(LWS_WITHOUT_SERVER))
+#if ((defined(LWS_HAVE_SSL_CTX_set_keylog_callback) || \
+	defined(LWS_WITH_OPENHITLS)) && defined(LWS_WITH_TLS) && \
+	(!defined(LWS_WITHOUT_CLIENT) || !defined(LWS_WITHOUT_SERVER)))
 	char					keylog_file[96];
 #endif
 
@@ -1208,9 +1209,9 @@ lws_transport_mux_next_free(lws_transport_mux_t *tm, lws_mux_ch_idx_t *result);
 void
 sul_ping_cb(lws_sorted_usec_list_t *sul);
 
-/* Added Declaration of this function to make common for openssl-server */
-#if defined(LWS_HAVE_SSL_CTX_set_keylog_callback) && \
-	defined(LWS_WITH_TLS)
+/* Common keylog sink for TLS backends that expose a keylog callback */
+#if ((defined(LWS_HAVE_SSL_CTX_set_keylog_callback) && \
+	defined(LWS_WITH_TLS)) || defined(LWS_WITH_OPENHITLS))
 void
 lws_klog_dump(const SSL *ssl, const char *line);
 #endif
