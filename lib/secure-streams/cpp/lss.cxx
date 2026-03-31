@@ -68,8 +68,8 @@ lss::lss(lws_ctx_t _ctx, std::string _uri, lsscomp_t _comp, bool _psh,
 	 * lss itself.
 	 */
 
-	ssi.handle_offset	    = offsetof(lssPriv, m_ss);
-	ssi.opaque_user_data_offset = offsetof(lssPriv, m_plss);
+	ssi.handle_offset	    = offsetof(lssPriv, lssPriv::m_ss);
+	ssi.opaque_user_data_offset = offsetof(lssPriv, lssPriv::m_plss);
 
 	ssi.user_alloc	= sizeof(lssPriv);
 	ssi.rx		= rx;
