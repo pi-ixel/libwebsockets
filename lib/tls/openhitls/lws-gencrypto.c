@@ -41,6 +41,8 @@ lws_genhash_type_to_hitls_md_id(enum lws_genhash_types hash_type)
 		return CRYPT_MD_SHA384;
 	case LWS_GENHASH_TYPE_SHA512:
 		return CRYPT_MD_SHA512;
+	case LWS_GENHASH_TYPE_UNKNOWN:
+		return CRYPT_MD_SHA1;
 	default:
 		return CRYPT_MD_MAX;
 	}
@@ -51,19 +53,25 @@ lws_genaes_mode_to_hitls_cipher_id(enum enum_aes_modes mode, size_t keylen)
 {
 	size_t keybits = keylen * 8;
 
+	/* LWS_GAESM_KW is JOSE RFC3394 key wrap (no padding). */
 	switch (keybits) {
 	case 128:
 		switch (mode) {
 		case LWS_GAESM_CBC:
 			return CRYPT_CIPHER_AES128_CBC;
+		case LWS_GAESM_CFB128:
+		case LWS_GAESM_CFB8:
+			return CRYPT_CIPHER_AES128_CFB;
 		case LWS_GAESM_CTR:
 			return CRYPT_CIPHER_AES128_CTR;
 		case LWS_GAESM_ECB:
 			return CRYPT_CIPHER_AES128_ECB;
+		case LWS_GAESM_OFB:
+			return CRYPT_CIPHER_AES128_OFB;
 		case LWS_GAESM_GCM:
 			return CRYPT_CIPHER_AES128_GCM;
 		case LWS_GAESM_KW:
-			return CRYPT_CIPHER_AES128_WRAP_PAD;
+			return CRYPT_CIPHER_AES128_WRAP_NOPAD;
 		default:
 			return CRYPT_CIPHER_MAX;
 		}
@@ -71,14 +79,19 @@ lws_genaes_mode_to_hitls_cipher_id(enum enum_aes_modes mode, size_t keylen)
 		switch (mode) {
 		case LWS_GAESM_CBC:
 			return CRYPT_CIPHER_AES192_CBC;
+		case LWS_GAESM_CFB128:
+		case LWS_GAESM_CFB8:
+			return CRYPT_CIPHER_AES192_CFB;
 		case LWS_GAESM_CTR:
 			return CRYPT_CIPHER_AES192_CTR;
 		case LWS_GAESM_ECB:
 			return CRYPT_CIPHER_AES192_ECB;
+		case LWS_GAESM_OFB:
+			return CRYPT_CIPHER_AES192_OFB;
 		case LWS_GAESM_GCM:
 			return CRYPT_CIPHER_AES192_GCM;
 		case LWS_GAESM_KW:
-			return CRYPT_CIPHER_AES192_WRAP_PAD;
+			return CRYPT_CIPHER_AES192_WRAP_NOPAD;
 		default:
 			return CRYPT_CIPHER_MAX;
 		}
@@ -86,14 +99,21 @@ lws_genaes_mode_to_hitls_cipher_id(enum enum_aes_modes mode, size_t keylen)
 		switch (mode) {
 		case LWS_GAESM_CBC:
 			return CRYPT_CIPHER_AES256_CBC;
+		case LWS_GAESM_CFB128:
+		case LWS_GAESM_CFB8:
+			return CRYPT_CIPHER_AES256_CFB;
 		case LWS_GAESM_CTR:
 			return CRYPT_CIPHER_AES256_CTR;
 		case LWS_GAESM_ECB:
 			return CRYPT_CIPHER_AES256_ECB;
+		case LWS_GAESM_OFB:
+			return CRYPT_CIPHER_AES256_OFB;
+		case LWS_GAESM_XTS:
+			return CRYPT_CIPHER_AES128_XTS;
 		case LWS_GAESM_GCM:
 			return CRYPT_CIPHER_AES256_GCM;
 		case LWS_GAESM_KW:
-			return CRYPT_CIPHER_AES256_WRAP_PAD;
+			return CRYPT_CIPHER_AES256_WRAP_NOPAD;
 		default:
 			return CRYPT_CIPHER_MAX;
 		}
@@ -103,19 +123,6 @@ lws_genaes_mode_to_hitls_cipher_id(enum enum_aes_modes mode, size_t keylen)
 		return CRYPT_CIPHER_MAX;
 	default:
 		return CRYPT_CIPHER_MAX;
-	}
-}
-
-int32_t
-lws_genrsa_padding_to_hitls(enum enum_genrsa_mode mode)
-{
-	switch (mode) {
-	case LGRSAM_PKCS1_1_5:
-		return CRYPT_RSAES_PKCSV15;
-	case LGRSAM_PKCS1_OAEP_PSS:
-		return CRYPT_EMSA_PSS;
-	default:
-		return CRYPT_RSAES_PKCSV15;
 	}
 }
 
