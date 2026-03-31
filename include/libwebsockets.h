@@ -428,14 +428,13 @@ typedef void X509_VERIFY_PARAM;
 
 #endif
 #elif defined(LWS_WITH_OPENHITLS)
-#include <hitls.h>
+#include <hitls_type.h>
 #include <hitls_cert_type.h>
-struct lws_tls_openhitls_ctx;
-struct lws_tls_openhitls_x509;
+#include <hitls_pki_cert.h>
 typedef HITLS_Ctx SSL;
-typedef struct lws_tls_openhitls_ctx SSL_CTX;
+typedef HITLS_Config SSL_CTX;
 typedef void BIO;
-typedef struct lws_tls_openhitls_x509 X509;
+typedef HITLS_X509_Cert X509;
 typedef HITLS_CERT_StoreCtx X509_STORE_CTX;
 #else
 #include <openssl/ssl.h>
