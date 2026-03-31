@@ -33,6 +33,7 @@ Build profile (choose one, default: fulltests):
 
 Execution options:
   asan             Enable AddressSanitizer for build configuration
+  gcov             Enable code coverage analysis
   run-tests        Install into DESTDIR and run ctest after building
 
 Options:
@@ -86,6 +87,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     asan)
       cmake_args+=("-DLWS_WITH_ASAN=1")
+      ;;
+    gcov)
+      cmake_args+=("-DLWS_WITH_GCOV=1")
       ;;
     openssl|mbedtls|wolfssl|libressl|boringssl|awslc|openhitls)
       if [ -n "${tls_choice}" ] && [ "${tls_choice}" != "${1}" ]; then
@@ -192,22 +196,29 @@ if [ "${profile}" = "fulltests" ]; then
     "-DLWS_HAVE_PTHREAD_H=1"
     "-DLWS_WITH_MINIMAL_EXAMPLES=1"
     "-DLWS_WITHOUT_TESTAPPS=0"
+    "-DLWS_WITHOUT_TEST_SERVER=0"
+    "-DLWS_WITH_SECURE_STREAMS=1"
     "-DLWS_WITH_HTTP2=1"
-    "-DLWS_CTEST_INTERNET_AVAILABLE=0"
+    "-DLWS_CTEST_INTERNET_AVAILABLE=1"
     "-DLWS_WITH_GENCRYPTO=1"
     "-DLWS_WITH_JOSE=1"
     "-DLWS_WITH_COSE=1"
     "-DLWS_ROLE_MQTT=1"
     "-DLWS_WITH_EVENT_LIBS=1"
     "-DLWS_WITH_LIBUV=1"
+    "-DLWS_WITH_HTTP_PROXY=1"
+    "-DLWS_ROLE_RAW_PROXY=1"
     "-DLWS_WITH_PLUGINS=1"
     "-DLWS_WITH_PLUGINS_API=1"
     "-DLWS_WITH_PLUGINS_BUILTIN=1"
     "-DLWS_WITH_SQLITE3=1"
     "-DLWS_WITH_STRUCT_JSON=1"
     "-DLWS_WITH_STRUCT_SQLITE3=1"
+    "-DLWS_WITH_SYS_ASYNC_DNS=1"
     "-DLWS_WITH_SYS_FAULT_INJECTION=1"
     "-DLWS_WITH_UDP=1"
+    "-DLWS_WITH_SECURE_STREAMS_PROXY_API=1"
+    "-DLWS_WITH_SECURE_STREAMS_CPP=1"
     "-DLWS_WITH_LWS_DSH=1"
     "-DLWS_WITH_FTS=1"
     "-DLWS_WITH_CBOR=1"
