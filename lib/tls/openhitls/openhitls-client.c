@@ -328,9 +328,7 @@ static int32_t OpenHiTLS_client_verify_callback(int32_t verify_code,
 	}
 
 #if defined(LWS_WITH_TLS_JIT_TRUST)
-	if (vr == HITLS_X509_ERR_VFY_INVALID_CA ||
-	    vr == HITLS_X509_ERR_ISSUE_CERT_NOT_FOUND ||
-	    vr == HITLS_X509_ERR_ROOT_CERT_NOT_FOUND) {
+	if (vr == HITLS_X509_ERR_ISSUE_CERT_NOT_FOUND) {
 		if (!wsi->tls.kid_chain.count) {
 			lws_openhitls_collect_peer_kids(wsi, store_ctx);
 		}
