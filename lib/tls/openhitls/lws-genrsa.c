@@ -49,28 +49,17 @@ lws_genrsa_set_crypt_padding(struct lws_genrsa_ctx *ctx)
 		return -1;
 	}
 	if (ctx->mode == LGRSAM_PKCS1_OAEP_PSS) {
-		BSL_Param oaep_param[3] = { {0} };
-
 		mdId = lws_genhash_type_to_hitls_md_id(ctx->oaep_hashid);
 		if (mdId == CRYPT_MD_MAX) {
 			lwsl_err("%s: unsupported OAEP hash %d\n", __func__,
 				 (int)ctx->oaep_hashid);
 			return -1;
 		}
-
-		oaep_param[0].key = CRYPT_PARAM_RSA_MD_ID;
-		oaep_param[0].value = &mdId;
-		oaep_param[0].valueLen = sizeof(mdId);
-		oaep_param[0].valueType = BSL_PARAM_TYPE_INT32;
-		oaep_param[1].key = CRYPT_PARAM_RSA_MGF1_ID;
-		oaep_param[1].value = &mdId;
-		oaep_param[1].valueLen = sizeof(mdId);
-		oaep_param[1].valueType = BSL_PARAM_TYPE_INT32;
-		oaep_param[2].key = 0;
-		oaep_param[2].valueType = 0;
-		oaep_param[2].value = NULL;
-		oaep_param[2].valueLen = 0;
-		oaep_param[2].useLen = 0;
+		BSL_Param oaep_param[] = {
+			{ CRYPT_PARAM_RSA_MD_ID, BSL_PARAM_TYPE_INT32, &mdId, sizeof(mdId), 0 },
+			{ CRYPT_PARAM_RSA_MGF1_ID, BSL_PARAM_TYPE_INT32, &mdId, sizeof(mdId), 0 },
+			BSL_PARAM_END
+		};
 
 		ret = CRYPT_EAL_PkeyCtrl(ctx->ctx, CRYPT_CTRL_SET_RSA_RSAES_OAEP,
 					 oaep_param, 0);
@@ -129,10 +118,127 @@ lws_genrsa_set_sign_padding(struct lws_genrsa_ctx *ctx, CRYPT_MD_AlgId mdId)
 	return 0;
 }
 
+static int
+lws_genrsa_private_encrypt_prepare(struct lws_genrsa_ctx *ctx,
+				   const uint8_t *in, size_t in_len,
+				   uint8_t **padded, uint32_t *padded_len)
+{
+	const uint32_t pkcs1_type1_overhead = 11;
+	uint32_t len, pad_len;
+	uint8_t *buf;
+
+	if (in_len > UINT32_MAX)
+		return -1;
+
+	len = CRYPT_EAL_PkeyGetKeyLen(ctx->ctx);
+	if (!len) {
+		lwsl_err("%s: CRYPT_EAL_PkeyGetKeyLen failed\n", __func__);
+		return -1;
+	}
+
+	buf = lws_malloc(len, "rsa-prvenc-pad");
+	if (!buf)
+		return -1;
+
+	switch (ctx->mode) {
+	case LGRSAM_PKCS1_1_5:
+		if (len <= pkcs1_type1_overhead ||
+		    in_len > len - pkcs1_type1_overhead) {
+			lwsl_err("%s: input too large for key size\n", __func__);
+			goto bail;
+		}
+		buf[0] = 0x00;
+		buf[1] = 0x01;
+		pad_len = len - 3 - (uint32_t)in_len;
+		memset(&buf[2], 0xff, pad_len);
+		buf[2 + pad_len] = 0x00;
+		memcpy(&buf[3 + pad_len], in, in_len);
+		break;
+	default:
+		lwsl_err("%s: unsupported mode %d\n", __func__, (int)ctx->mode);
+		goto bail;
+	}
+
+	*padded = buf;
+	*padded_len = len;
+
+	return 0;
+
+bail:
+	lws_free(buf);
+
+	return -1;
+}
+
 void
 lws_genrsa_destroy_elements(struct lws_gencrypto_keyelem *el)
 {
 	lws_gencrypto_destroy_elements(el, LWS_GENCRYPTO_RSA_KEYEL_COUNT);
+}
+
+struct lws_genrsa_keypair_bufs {
+	uint8_t *n;
+	uint8_t *e;
+	uint8_t *d;
+	uint8_t *p;
+	uint8_t *q;
+};
+
+static void
+lws_genrsa_keypair_bufs_destroy(struct lws_genrsa_keypair_bufs *bufs)
+{
+	if (bufs->n)
+		lws_free(bufs->n);
+	if (bufs->e)
+		lws_free(bufs->e);
+	if (bufs->d)
+		lws_free(bufs->d);
+	if (bufs->p)
+		lws_free(bufs->p);
+	if (bufs->q)
+		lws_free(bufs->q);
+
+	memset(bufs, 0, sizeof(*bufs));
+}
+
+static int
+lws_genrsa_keypair_bufs_alloc(struct lws_genrsa_keypair_bufs *bufs, uint32_t bytes)
+{
+	bufs->n = lws_malloc(bytes, "rsa-n");
+	bufs->e = lws_malloc(3, "rsa-e");
+	bufs->d = lws_malloc(bytes, "rsa-d");
+	bufs->p = lws_malloc(bytes / 2, "rsa-p");
+	bufs->q = lws_malloc(bytes / 2, "rsa-q");
+	if (!bufs->n || !bufs->e || !bufs->d || !bufs->p || !bufs->q) {
+		lws_genrsa_keypair_bufs_destroy(bufs);
+		return -1;
+	}
+
+	return 0;
+}
+
+static void
+lws_genrsa_keypair_bufs_to_elements(struct lws_gencrypto_keyelem *el,
+				    const CRYPT_EAL_PkeyPub *pubKey,
+				    const CRYPT_EAL_PkeyPrv *prvKey,
+				    struct lws_genrsa_keypair_bufs *bufs)
+{
+	el[LWS_GENCRYPTO_RSA_KEYEL_N].len = pubKey->key.rsaPub.nLen;
+	el[LWS_GENCRYPTO_RSA_KEYEL_N].buf = bufs->n;
+
+	el[LWS_GENCRYPTO_RSA_KEYEL_E].len = pubKey->key.rsaPub.eLen;
+	el[LWS_GENCRYPTO_RSA_KEYEL_E].buf = bufs->e;
+
+	el[LWS_GENCRYPTO_RSA_KEYEL_D].len = prvKey->key.rsaPrv.dLen;
+	el[LWS_GENCRYPTO_RSA_KEYEL_D].buf = bufs->d;
+
+	el[LWS_GENCRYPTO_RSA_KEYEL_P].len = prvKey->key.rsaPrv.pLen;
+	el[LWS_GENCRYPTO_RSA_KEYEL_P].buf = bufs->p;
+
+	el[LWS_GENCRYPTO_RSA_KEYEL_Q].len = prvKey->key.rsaPrv.qLen;
+	el[LWS_GENCRYPTO_RSA_KEYEL_Q].buf = bufs->q;
+
+	memset(bufs, 0, sizeof(*bufs));
 }
 
 int
@@ -141,10 +247,6 @@ lws_genrsa_create(struct lws_genrsa_ctx *ctx,
 		  struct lws_context *context, enum enum_genrsa_mode mode,
 		  enum lws_genhash_types oaep_hashid)
 {
-	CRYPT_EAL_PkeyPub pubKey = {0};
-	CRYPT_EAL_PkeyPrv prvKey = {0};
-	CRYPT_RsaPub *rsaPub;
-	CRYPT_RsaPrv *rsaPrv;
 	int ret;
 
 	memset(ctx, 0, sizeof(*ctx));
@@ -162,16 +264,16 @@ lws_genrsa_create(struct lws_genrsa_ctx *ctx,
 		return 1;
 	}
 
-	pubKey.id = CRYPT_PKEY_RSA;
-	prvKey.id = CRYPT_PKEY_RSA;
-	rsaPub = &pubKey.key.rsaPub;
-	rsaPrv = &prvKey.key.rsaPrv;
-
 	/* Set public key elements (n and e) */
-	rsaPub->n = el[LWS_GENCRYPTO_RSA_KEYEL_N].buf;
-	rsaPub->nLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_N].len;
-	rsaPub->e = el[LWS_GENCRYPTO_RSA_KEYEL_E].buf;
-	rsaPub->eLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_E].len;
+	CRYPT_EAL_PkeyPub pubKey = {
+		.id = CRYPT_PKEY_RSA,
+		.key.rsaPub = {
+			.n = el[LWS_GENCRYPTO_RSA_KEYEL_N].buf,
+			.nLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_N].len,
+			.e = el[LWS_GENCRYPTO_RSA_KEYEL_E].buf,
+			.eLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_E].len,
+		},
+	};
 
 	ret = CRYPT_EAL_PkeySetPub(ctx->ctx, &pubKey);
 	if (ret != CRYPT_SUCCESS) {
@@ -180,40 +282,31 @@ lws_genrsa_create(struct lws_genrsa_ctx *ctx,
 	}
 
 	/* Set private key elements if present */
-	if (el[LWS_GENCRYPTO_RSA_KEYEL_D].len > 0) {
-		rsaPrv->d = el[LWS_GENCRYPTO_RSA_KEYEL_D].buf;
-		rsaPrv->dLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_D].len;
-		rsaPrv->n = el[LWS_GENCRYPTO_RSA_KEYEL_N].buf;
-		rsaPrv->nLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_N].len;
-		rsaPrv->e = el[LWS_GENCRYPTO_RSA_KEYEL_E].buf;
-		rsaPrv->eLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_E].len;
+	if (el[LWS_GENCRYPTO_RSA_KEYEL_D].len == 0)
+		return 0;
 
-		if (el[LWS_GENCRYPTO_RSA_KEYEL_P].len > 0) {
-			rsaPrv->p = el[LWS_GENCRYPTO_RSA_KEYEL_P].buf;
-			rsaPrv->pLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_P].len;
-		}
-		if (el[LWS_GENCRYPTO_RSA_KEYEL_Q].len > 0) {
-			rsaPrv->q = el[LWS_GENCRYPTO_RSA_KEYEL_Q].buf;
-			rsaPrv->qLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_Q].len;
-		}
-		if (el[LWS_GENCRYPTO_RSA_KEYEL_DP].len > 0) {
-			rsaPrv->dP = el[LWS_GENCRYPTO_RSA_KEYEL_DP].buf;
-			rsaPrv->dPLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_DP].len;
-		}
-		if (el[LWS_GENCRYPTO_RSA_KEYEL_DQ].len > 0) {
-			rsaPrv->dQ = el[LWS_GENCRYPTO_RSA_KEYEL_DQ].buf;
-			rsaPrv->dQLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_DQ].len;
-		}
-		if (el[LWS_GENCRYPTO_RSA_KEYEL_QI].len > 0) {
-			rsaPrv->qInv = el[LWS_GENCRYPTO_RSA_KEYEL_QI].buf;
-			rsaPrv->qInvLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_QI].len;
-		}
+	CRYPT_EAL_PkeyPrv prvKey = {
+		.id = CRYPT_PKEY_RSA,
+		.key.rsaPrv = {
+			.d = el[LWS_GENCRYPTO_RSA_KEYEL_D].buf,
+			.dLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_D].len,
+			.n = el[LWS_GENCRYPTO_RSA_KEYEL_N].buf,
+			.nLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_N].len,
+			.e = el[LWS_GENCRYPTO_RSA_KEYEL_E].buf,
+			.eLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_E].len,
+			.p = el[LWS_GENCRYPTO_RSA_KEYEL_P].len > 0 ?
+					el[LWS_GENCRYPTO_RSA_KEYEL_P].buf : NULL,
+			.pLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_P].len,
+			.q = el[LWS_GENCRYPTO_RSA_KEYEL_Q].len > 0 ?
+					el[LWS_GENCRYPTO_RSA_KEYEL_Q].buf : NULL,
+			.qLen = (uint32_t)el[LWS_GENCRYPTO_RSA_KEYEL_Q].len,
+		},
+	};
 
-		ret = CRYPT_EAL_PkeySetPrv(ctx->ctx, &prvKey);
-		if (ret != CRYPT_SUCCESS) {
-			lwsl_err("%s: CRYPT_EAL_PkeySetPrv failed: %d\n", __func__, ret);
-			goto bail;
-		}
+	ret = CRYPT_EAL_PkeySetPrv(ctx->ctx, &prvKey);
+	if (ret != CRYPT_SUCCESS) {
+		lwsl_err("%s: CRYPT_EAL_PkeySetPrv failed: %d\n", __func__, ret);
+		goto bail;
 	}
 
 	return 0;
@@ -231,17 +324,14 @@ lws_genrsa_new_keypair(struct lws_context *context, struct lws_genrsa_ctx *ctx,
 {
 	CRYPT_EAL_PkeyPara para = {0};
 	CRYPT_RsaPara *rsaPara = &para.para.rsaPara;
-	CRYPT_EAL_PkeyPub pubKey = {0};
-	CRYPT_EAL_PkeyPrv prvKey = {0};
-	CRYPT_RsaPub *rsaPub;
-	CRYPT_RsaPrv *rsaPrv;
+	struct lws_genrsa_keypair_bufs bufs;
 	int ret;
-	int n;
 
 	memset(ctx, 0, sizeof(*ctx));
 	ctx->context = context;
 	ctx->mode = mode;
 	ctx->oaep_hashid = LWS_GENHASH_TYPE_SHA1;
+	memset(&bufs, 0, sizeof(bufs));
 
 	/* Initialize random number generator if needed */
 	if (lws_hitls_init_rand() < 0)
@@ -276,84 +366,50 @@ lws_genrsa_new_keypair(struct lws_context *context, struct lws_genrsa_ctx *ctx,
 
 	/* Extract the key elements
 	 * Need to allocate buffers for the output first */
-	pubKey.id = CRYPT_PKEY_RSA;
-	prvKey.id = CRYPT_PKEY_RSA;
-	rsaPub = &pubKey.key.rsaPub;
-	rsaPrv = &prvKey.key.rsaPrv;
-
-	/* Allocate buffers for public key */
 	uint32_t bytes = (uint32_t)bits / 8;
-	uint8_t *nBuf = lws_malloc(bytes, "rsa-n");
-	uint8_t *eBuf = lws_malloc(3, "rsa-e");  /* Public exponent is typically 3 bytes */
-	if (!nBuf || !eBuf) {
-		lws_free(nBuf);
-		lws_free(eBuf);
+	if (lws_genrsa_keypair_bufs_alloc(&bufs, bytes))
 		goto bail;
-	}
-	rsaPub->n = nBuf;
-	rsaPub->nLen = bytes;
-	rsaPub->e = eBuf;
-	rsaPub->eLen = 3;
+
+	CRYPT_EAL_PkeyPub pubKey = {
+		.id = CRYPT_PKEY_RSA,
+		.key.rsaPub = {
+			.n = bufs.n,
+			.nLen = bytes,
+			.e = bufs.e,
+			.eLen = 3,
+		},
+	};
+	CRYPT_EAL_PkeyPrv prvKey = {
+		.id = CRYPT_PKEY_RSA,
+		.key.rsaPrv = {
+			.n = bufs.n,
+			.nLen = bytes,
+			.d = bufs.d,
+			.dLen = bytes,
+			.p = bufs.p,
+			.pLen = (uint32_t)bytes / 2,
+			.q = bufs.q,
+			.qLen = (uint32_t)bytes / 2,
+			.e = NULL,
+			.eLen = 0,
+		},
+	};
 
 	ret = CRYPT_EAL_PkeyGetPub(ctx->ctx, &pubKey);
 	if (ret != CRYPT_SUCCESS) {
 		lwsl_err("%s: CRYPT_EAL_PkeyGetPub failed: %d\n", __func__, ret);
-		lws_free(nBuf);
-		lws_free(eBuf);
 		goto bail;
 	}
-
-	/* Allocate buffers for private key
-	 * Note: RSA private key includes many optional fields */
-	uint8_t *dBuf = lws_malloc(bytes, "rsa-d");
-	uint8_t *pBuf = lws_malloc(bytes / 2, "rsa-p");
-	uint8_t *qBuf = lws_malloc(bytes / 2, "rsa-q");
-	if (!dBuf || !pBuf || !qBuf) {
-		lws_free(dBuf);
-		lws_free(pBuf);
-		lws_free(qBuf);
-		lws_free(nBuf);
-		lws_free(eBuf);
-		goto bail;
-	}
-	rsaPrv->n = nBuf;  /* Include n in private key */
-	rsaPrv->nLen = bytes;
-	rsaPrv->d = dBuf;
-	rsaPrv->dLen = bytes;
-	rsaPrv->p = pBuf;
-	rsaPrv->pLen = (uint32_t)bytes / 2;
-	rsaPrv->q = qBuf;
-	rsaPrv->qLen = (uint32_t)bytes / 2;
-	rsaPrv->e = NULL;  /* e is not needed in private key */
-	rsaPrv->eLen = 0;
 
 	ret = CRYPT_EAL_PkeyGetPrv(ctx->ctx, &prvKey);
 	if (ret != CRYPT_SUCCESS) {
 		lwsl_err("%s: CRYPT_EAL_PkeyGetPrv failed: %d\n", __func__, ret);
-		lws_free(nBuf);
-		lws_free(eBuf);
-		lws_free(dBuf);
-		lws_free(pBuf);
-		lws_free(qBuf);
 		goto bail;
 	}
 
 	/* Now copy the data to the output elements
 	 * Take ownership of the allocated buffers */
-	el[LWS_GENCRYPTO_RSA_KEYEL_N].len = rsaPub->nLen;
-	el[LWS_GENCRYPTO_RSA_KEYEL_N].buf = nBuf;  /* Transfer ownership */
-
-	el[LWS_GENCRYPTO_RSA_KEYEL_E].len = rsaPub->eLen;
-	el[LWS_GENCRYPTO_RSA_KEYEL_E].buf = eBuf;  /* Transfer ownership */
-
-	el[LWS_GENCRYPTO_RSA_KEYEL_D].len = rsaPrv->dLen;
-	el[LWS_GENCRYPTO_RSA_KEYEL_D].buf = dBuf;  /* Transfer ownership */
-
-	el[LWS_GENCRYPTO_RSA_KEYEL_P].len = rsaPrv->pLen;
-	el[LWS_GENCRYPTO_RSA_KEYEL_P].buf = pBuf;  /* Transfer ownership */
-
-	el[LWS_GENCRYPTO_RSA_KEYEL_Q].len = rsaPrv->qLen;
-	el[LWS_GENCRYPTO_RSA_KEYEL_Q].buf = qBuf;  /* Transfer ownership */
+	lws_genrsa_keypair_bufs_to_elements(el, &pubKey, &prvKey, &bufs);
 
 	/* Note: Padding mode is set separately during encrypt/decrypt operations,
 	 * not during key generation */
@@ -361,9 +417,8 @@ lws_genrsa_new_keypair(struct lws_context *context, struct lws_genrsa_ctx *ctx,
 	return 0;
 
 bail:
-	for (n = 0; n < LWS_GENCRYPTO_RSA_KEYEL_COUNT; n++)
-		if (el[n].buf)
-			lws_free_set_NULL(el[n].buf);
+	lws_genrsa_keypair_bufs_destroy(&bufs);
+	lws_genrsa_destroy_elements(el);
 
 	CRYPT_EAL_PkeyFreeCtx(ctx->ctx);
 	ctx->ctx = NULL;
@@ -375,8 +430,13 @@ int
 lws_genrsa_public_encrypt(struct lws_genrsa_ctx *ctx, const uint8_t *in,
 			  size_t in_len, uint8_t *out)
 {
-	uint32_t outLen = 512; /* Max RSA 4096 */
+	uint32_t outLen = CRYPT_EAL_PkeyGetKeyLen(ctx->ctx);
 	int32_t ret;
+
+	if (!outLen) {
+		lwsl_err("%s: CRYPT_EAL_PkeyGetKeyLen failed\n", __func__);
+		return -1;
+	}
 
 	if (lws_genrsa_set_crypt_padding(ctx))
 		return -1;
@@ -394,37 +454,62 @@ int
 lws_genrsa_private_encrypt(struct lws_genrsa_ctx *ctx, const uint8_t *in,
 			   size_t in_len, uint8_t *out)
 {
-	uint32_t outLen = 512; /* Max RSA 4096 */
+	uint8_t *padded = NULL;
+	uint32_t outLen, padded_len;
 	int32_t ret;
 
-	if (lws_genrsa_set_crypt_padding(ctx))
+	if (lws_genrsa_private_encrypt_prepare(ctx, in, in_len,
+					       &padded, &padded_len))
 		return -1;
+	outLen = padded_len;
 
-	ret = CRYPT_EAL_PkeySignData(ctx->ctx, in, (uint32_t)in_len, out, &outLen);
+	ret = CRYPT_EAL_PkeyCtrl(ctx->ctx, CRYPT_CTRL_SET_NO_PADDING, NULL, 0);
 	if (ret != CRYPT_SUCCESS) {
-		lwsl_err("%s: CRYPT_EAL_PkeySignData failed: %d\n", __func__, ret);
-		return -1;
+		lwsl_err("%s: CRYPT_EAL_PkeyCtrl(SET_NO_PADDING) failed: %d\n",
+			 __func__, ret);
+		goto bail;
 	}
 
+	ret = CRYPT_EAL_PkeyDecrypt(ctx->ctx, padded, padded_len, out, &outLen);
+	if (ret != CRYPT_SUCCESS) {
+		lwsl_err("%s: CRYPT_EAL_PkeyDecrypt failed: %d\n", __func__, ret);
+		goto bail;
+	}
+
+	lws_free(padded);
+
 	return (int)outLen;
+
+bail:
+	if (padded)
+		lws_free(padded);
+
+	return -1;
 }
 
 int
 lws_genrsa_public_decrypt(struct lws_genrsa_ctx *ctx, const uint8_t *in,
 			  size_t in_len, uint8_t *out, size_t out_max)
 {
+	uint32_t outLen;
 	int32_t ret;
+
+	if (out_max > UINT32_MAX)
+		return -1;
 
 	if (lws_genrsa_set_crypt_padding(ctx))
 		return -1;
 
-	ret = CRYPT_EAL_PkeyVerifyData(ctx->ctx, in, (uint32_t)in_len, out, (uint32_t)out_max);
+	outLen = (uint32_t)out_max;
+	ret = CRYPT_EAL_PkeyVerifyRecover(ctx->ctx, in, (uint32_t)in_len,
+					  out, &outLen);
 	if (ret != CRYPT_SUCCESS) {
-		lwsl_err("%s: CRYPT_EAL_PkeyVerifyData failed: %d\n", __func__, ret);
+		lwsl_err("%s: CRYPT_EAL_PkeyVerifyRecover failed: %d\n",
+			 __func__, ret);
 		return -1;
 	}
 
-	return (int)out_max;
+	return (int)outLen;
 }
 
 int
