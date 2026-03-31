@@ -27,6 +27,8 @@
 
 #include <stdio.h>
 
+#include "cipher-mapping.h"
+
 #include <hitls.h>
 #include <hitls_config.h>
 #include <hitls_alpn.h>
@@ -52,25 +54,13 @@
 #include <hitls_pki_errno.h>
 #include <bsl_uio.h>
 
-struct lws_tls_openhitls_ctx {
-	HITLS_Config *config;
-#if defined(LWS_WITH_CLIENT)
-	HITLS_Config *client_config;
-	uint8_t client_explicit_ca_loaded;
-#endif
-};
-
-struct lws_tls_openhitls_bio {
-	BSL_UIO *uio;
-};
-
 struct lws_x509_cert {
 	HITLS_X509_Cert *cert;
 };
 
 typedef HITLS_Ctx lws_tls_conn;
-typedef struct lws_tls_openhitls_ctx lws_tls_ctx;
-typedef struct lws_tls_openhitls_bio lws_tls_bio;
+typedef HITLS_Config lws_tls_ctx;
+typedef BSL_UIO lws_tls_bio;
 
 /*
  * Session reuse structure for client context caching
@@ -87,19 +77,7 @@ struct lws_tls_client_reuse {
 #define LWS_OPENHITLS_HOSTNAME_VERIFY_FLAGS 0u
 
 int
-lws_openhitls_session_set(struct lws *wsi, const char *host, uint16_t port);
-
-void
-lws_openhitls_verify_bind(lws_tls_conn *ssl);
-
-lws_tls_conn *
-lws_openhitls_verify_get_ssl(void);
-
-void
-lws_openhitls_verify_unbind(void);
-
-uint32_t
-lws_openhitls_pending_bytes(struct lws *wsi);
+lws_openhitls_describe_cipher(struct lws *wsi);
 
 void
 lws_openhitls_klog_dump(HITLS_Ctx *ctx, const char *line);
@@ -119,100 +97,15 @@ lws_genec_curve_to_hitls_para_id(const char *curve_name);
 int
 lws_genec_curve_key_bytes(const char *curve_name);
 
+int
+lws_tls_openhitls_cert_info(HITLS_X509_Cert *x509,
+			    enum lws_tls_cert_info type,
+			    union lws_tls_cert_info_results *buf, size_t len);
+
 static LWS_INLINE HITLS_Config *
 lws_openhitls_server_config_from_ssl_ctx(void *ssl_ctx)
 {
-	lws_tls_ctx *ctx = (lws_tls_ctx *)ssl_ctx;
-
-	return ctx ? ctx->config : NULL;
-}
-
-static LWS_INLINE int
-lws_openhitls_peer_cert_is_self_signed(HITLS_X509_Cert *cert)
-{
-	bool is_self_signed = false;
-
-	if (!cert)
-		return 0;
-
-	if (HITLS_X509_CertCtrl(cert, HITLS_X509_IS_SELF_SIGNED,
-				&is_self_signed,
-				(uint32_t)sizeof(is_self_signed)) !=
-			HITLS_SUCCESS)
-		return 0;
-
-	return is_self_signed ? 1 : 0;
-}
-
-static LWS_INLINE void
-lws_openhitls_verify_result_to_policy(int vr, HITLS_X509_Cert *peer_cert,
-				      const char **type, unsigned int *avoid)
-{
-	const char *lt = "tls=verify";
-	unsigned int la = 0;
-	int self_signed = lws_openhitls_peer_cert_is_self_signed(peer_cert);
-
-	switch (vr) {
-	case HITLS_X509_ERR_VFY_HOSTNAME_FAIL:
-		lt = "tls=hostname";
-		la = LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK;
-		break;
-	case HITLS_X509_ERR_VFY_INVALID_CA:
-		lt = "tls=invalidca";
-		la = LCCSCF_ALLOW_SELFSIGNED;
-		break;
-	case HITLS_X509_ERR_ISSUE_CERT_NOT_FOUND:
-	case HITLS_X509_ERR_ROOT_CERT_NOT_FOUND:
-		lt = "tls=invalidca";
-		la = self_signed ? LCCSCF_ALLOW_SELFSIGNED :
-				   (LCCSCF_ALLOW_INSECURE |
-				    LCCSCF_ALLOW_SELFSIGNED);
-		break;
-	case HITLS_X509_ERR_VFY_NOTBEFORE_IN_FUTURE:
-	case HITLS_X509_ERR_TIME_FUTURE:
-		lt = "tls=notyetvalid";
-		la = LCCSCF_ALLOW_EXPIRED;
-		break;
-	case HITLS_X509_ERR_VFY_NOTAFTER_EXPIRED:
-	case HITLS_X509_ERR_TIME_EXPIRED:
-		lt = "tls=expired";
-		la = LCCSCF_ALLOW_EXPIRED;
-		break;
-	default:
-		break;
-	}
-
-	if (type)
-		*type = lt;
-	if (avoid)
-		*avoid = la;
-}
-
-static LWS_INLINE int
-lws_openhitls_error_to_lws(int hitls_ret)
-{
-	switch (hitls_ret) {
-	case HITLS_SUCCESS:
-		return LWS_SSL_CAPABLE_DONE;
-
-	case HITLS_WANT_READ:
-	case HITLS_REC_NORMAL_RECV_BUF_EMPTY:
-		return LWS_SSL_CAPABLE_MORE_SERVICE_READ;
-
-	case HITLS_WANT_WRITE:
-	case HITLS_REC_NORMAL_IO_BUSY:
-		return LWS_SSL_CAPABLE_MORE_SERVICE_WRITE;
-
-	case HITLS_WANT_CONNECT:
-	case HITLS_WANT_ACCEPT:
-		return LWS_SSL_CAPABLE_MORE_SERVICE;
-
-	case HITLS_REC_NORMAL_IO_EOF:
-		return LWS_SSL_CAPABLE_DONE;
-
-	default:
-		return LWS_SSL_CAPABLE_ERROR;
-	}
+	return (HITLS_Config *)ssl_ctx;
 }
 
 static LWS_INLINE void
@@ -226,25 +119,10 @@ lws_openhitls_trim_ws(char **start, char **end)
 		(*end)--;
 }
 
-static LWS_INLINE const char *
-lws_openhitls_cipher_seg_norm(const char *seg)
-{
-	if (!strcmp(seg, "AES128"))
-		return "AES_128";
-	if (!strcmp(seg, "AES256"))
-		return "AES_256";
-	if (!strcmp(seg, "CCM8"))
-		return "CCM_8";
-
-	return seg;
-}
-
 static LWS_INLINE int
 lws_openhitls_cipher_to_stdname(const char *in, char *out, size_t out_len)
 {
-	char tmp[192], *parts[16], *p, *s;
-	const char *seg;
-	size_t i, np = 0, from = 0;
+	size_t i;
 	int n;
 
 	if (!in || !*in || !out || !out_len)
@@ -254,64 +132,24 @@ lws_openhitls_cipher_to_stdname(const char *in, char *out, size_t out_len)
 		return -1;
 
 	if (!strncmp(in, "TLS_", 4)) {
-		lws_strncpy(out, in, out_len);
+		n = lws_snprintf(out, out_len, "%s", in);
+		if (n <= 0 || (size_t)n >= out_len)
+			return -1;
+
 		return 0;
 	}
 
-	if (strlen(in) >= sizeof(tmp))
-		return -1;
+	for (i = 0; i < LWS_ARRAY_SIZE(lws_openhitls_cipher_map); i++)
+		if (!strcmp(in, lws_openhitls_cipher_map[i].openssl_name)) {
+			n = lws_snprintf(out, out_len, "%s",
+					 lws_openhitls_cipher_map[i].iana_name);
+			if (n <= 0 || (size_t)n >= out_len)
+				return -1;
 
-	lws_strncpy(tmp, in, sizeof(tmp));
-	p = tmp;
-	parts[np++] = p;
-	while (*p && np < LWS_ARRAY_SIZE(parts)) {
-		if (*p == '-') {
-			*p = '\0';
-			parts[np++] = p + 1;
+			return 0;
 		}
-		p++;
-	}
-	if (np < 2)
-		return -1;
 
-	n = 0;
-	if (!strcmp(parts[0], "ECDHE") && np >= 3 &&
-	    (!strcmp(parts[1], "RSA") || !strcmp(parts[1], "ECDSA") ||
-	     !strcmp(parts[1], "PSK"))) {
-		n = lws_snprintf(out, out_len, "TLS_ECDHE_%s_WITH_", parts[1]);
-		from = 2;
-	} else if (!strcmp(parts[0], "DHE") && np >= 3 &&
-		   (!strcmp(parts[1], "RSA") || !strcmp(parts[1], "DSS") ||
-		    !strcmp(parts[1], "PSK"))) {
-		n = lws_snprintf(out, out_len, "TLS_DHE_%s_WITH_", parts[1]);
-		from = 2;
-	} else if (!strcmp(parts[0], "RSA")) {
-		n = lws_snprintf(out, out_len, "TLS_RSA_WITH_");
-		from = 1;
-	} else if (!strcmp(parts[0], "PSK")) {
-		n = lws_snprintf(out, out_len, "TLS_PSK_WITH_");
-		from = 1;
-	} else {
-		return -1;
-	}
-	if (n <= 0 || (size_t)n >= out_len)
-		return -1;
-
-	for (i = from; i < np; i++) {
-		size_t left;
-
-		seg = lws_openhitls_cipher_seg_norm(parts[i]);
-		s = out + strlen(out);
-		left = out_len - strlen(out);
-		if (!left)
-			return -1;
-		n = lws_snprintf(s, left, "%s%s",
-				 i == from ? "" : "_", seg);
-		if (n <= 0 || (size_t)n >= left)
-			return -1;
-	}
-
-	return 0;
+	return -1;
 }
 
 static LWS_INLINE int
