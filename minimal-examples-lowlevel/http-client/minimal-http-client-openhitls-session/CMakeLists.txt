@@ -70,7 +70,7 @@ if (requirements)
 			lws-minimal-http-client-openhitls-session
 				--ws --port ${PORT_OHSESS_WSS})
 		set_tests_properties(openhitls-session-wss PROPERTIES
-			WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+			WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 			TIMEOUT 30)
 	endif()
 

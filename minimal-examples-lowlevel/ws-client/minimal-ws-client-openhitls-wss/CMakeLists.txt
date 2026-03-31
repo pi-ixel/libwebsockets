@@ -27,7 +27,7 @@ if (requirements)
 			lws-minimal-ws-client-openhitls-wss
 				--port ${PORT_OHWSS_SRV})
 		set_tests_properties(openhitls-wss PROPERTIES
-			WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+			WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 			TIMEOUT 20)
 	endif()
 
