@@ -30,28 +30,12 @@
 #include "private-lib-core.h"
 #include "private-lib-tls.h"
 #include "private.h"
-static int
-lws_openhitls_peer_cert_is_self_signed(HITLS_X509_Cert* cert)
-{
-	bool is_self_signed = false;
-
-	if (!cert)
-		return 0;
-	if (HITLS_X509_CertCtrl(cert, HITLS_X509_IS_SELF_SIGNED,
-		&is_self_signed,
-		(uint32_t)sizeof(is_self_signed)) !=
-		HITLS_SUCCESS)
-		return 0;
-
-	return is_self_signed ? 1 : 0;
-}
 static void
 lws_openhitls_verify_result_to_policy(int vr, HITLS_X509_Cert *peer_cert,
 				      const char **type, unsigned int *avoid)
 {
 	const char *lt = "tls=verify";
 	unsigned int la = 0;
-	int self_signed = lws_openhitls_peer_cert_is_self_signed(peer_cert);
 
 	switch (vr) {
 	case HITLS_X509_ERR_VFY_HOSTNAME_FAIL:
@@ -59,15 +43,10 @@ lws_openhitls_verify_result_to_policy(int vr, HITLS_X509_Cert *peer_cert,
 		la = LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK;
 		break;
 	case HITLS_X509_ERR_VFY_INVALID_CA:
-		lt = "tls=invalidca";
-		la = LCCSCF_ALLOW_SELFSIGNED;
-		break;
 	case HITLS_X509_ERR_ISSUE_CERT_NOT_FOUND:
 	case HITLS_X509_ERR_ROOT_CERT_NOT_FOUND:
 		lt = "tls=invalidca";
-		la = self_signed ? LCCSCF_ALLOW_SELFSIGNED :
-				   (LCCSCF_ALLOW_INSECURE |
-				    LCCSCF_ALLOW_SELFSIGNED);
+		la = LCCSCF_ALLOW_SELFSIGNED;
 		break;
 	case HITLS_X509_ERR_VFY_NOTBEFORE_IN_FUTURE:
 	case HITLS_X509_ERR_TIME_FUTURE:
@@ -483,10 +462,8 @@ int lws_ssl_client_bio_create(struct lws *wsi)
 	}
 
 	if (!(wsi->tls.use_ssl & LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK)) {
-		/*
-		 * OpenHiTLS records hostname verification through the verify
-		 * callback so confirm_peer_cert can consume verify_result.
-		 */
+		/* HiTLS support NO_PARTIAL_WILDCARDS by default */
+		HITLS_SetHost(ssl, hostname);
 	}
 
 	HITLS_SetVerifyCb(ssl, OpenHiTLS_client_verify_callback);

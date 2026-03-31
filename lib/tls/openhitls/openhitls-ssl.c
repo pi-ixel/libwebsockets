@@ -28,16 +28,6 @@
 #include "private-lib-tls.h"
 #include "private.h"
 
-#ifndef SSL_CB_HANDSHAKE_START
-#define SSL_CB_HANDSHAKE_START	0x10
-#endif
-#ifndef SSL_CB_HANDSHAKE_DONE
-#define SSL_CB_HANDSHAKE_DONE	0x20
-#endif
-#ifndef SSL_CB_ALERT
-#define SSL_CB_ALERT		0x4000
-#endif
-
 /*
  * BSL_UIO helper functions
  */
