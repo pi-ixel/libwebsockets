@@ -13,6 +13,8 @@ int
 test_genaes(struct lws_context *context);
 int
 test_genec(struct lws_context *context);
+int
+test_genrsa(struct lws_context *context);
 
 int main(int argc, const char **argv)
 {
@@ -41,6 +43,7 @@ int main(int argc, const char **argv)
 
 	result |= test_genaes(context);
 	result |= test_genec(context);
+	result |= test_genrsa(context);
 
 	lwsl_user("Completed: %s\n", result ? "FAIL" : "PASS");
 
