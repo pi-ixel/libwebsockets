@@ -134,11 +134,12 @@ app_system_state_nf(lws_state_manager_t *mgr,
 		lwsl_user("%s: selfsigned test - expect rejection\n", __func__);
 	} else if (!strcmp(test_mode, "hostname")) {
 		/*
-		 * R7: Connect to server with wronghost cert.
-		 * No LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK.
-		 * Hostname "localhost" != CN/SAN "wronghost.example.com".
+		 * R7: Trust the wronghost cert explicitly so the rejection is
+		 * caused by hostname mismatch, not by the cert being self-signed.
+		 * No LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK, and "localhost" !=
+		 * CN/SAN "wronghost.example.com".
 		 */
-		i.ssl_connection = LCCSCF_USE_SSL | LCCSCF_ALLOW_SELFSIGNED;
+		i.ssl_connection = LCCSCF_USE_SSL;
 		lwsl_user("%s: hostname mismatch test - expect rejection\n",
 			  __func__);
 	} else if (!strcmp(test_mode, "mtls")) {
@@ -260,6 +261,10 @@ int main(int argc, const char **argv)
 		info.port = CONTEXT_PORT_NO_LISTEN;
 		if (p)
 			test_port = atoi(p);
+		if (!strcmp(test_mode, "hostname")) {
+			info.client_ssl_ca_filepath =
+				"./wronghost.example.com.cert";
+		}
 	}
 
 	if (!server_only) {

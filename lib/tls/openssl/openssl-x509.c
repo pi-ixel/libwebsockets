@@ -483,7 +483,7 @@ int
 lws_x509_verify(struct lws_x509_cert *x509, struct lws_x509_cert *trusted,
 		const char *common_name)
 {
-	char c[32], *p;
+	char c[256], *p;
 	int ret;
 
 	if (common_name) {
