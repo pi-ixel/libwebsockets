@@ -88,9 +88,6 @@ lws_genhash_type_to_hitls_md_id(enum lws_genhash_types hash_type);
 CRYPT_CIPHER_AlgId
 lws_genaes_mode_to_hitls_cipher_id(enum enum_aes_modes mode, size_t keylen);
 
-int32_t
-lws_genrsa_padding_to_hitls(enum enum_genrsa_mode mode);
-
 CRYPT_PKEY_ParaId
 lws_genec_curve_to_hitls_para_id(const char *curve_name);
 
