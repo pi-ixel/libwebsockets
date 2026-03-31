@@ -269,8 +269,8 @@ lws_tls_openssl_cert_info(X509 *x509, enum lws_tls_cert_info type,
 			if (!cv)
 				goto bail_ak;
 
-		        for (j = 0; j < OPENSSL_sk_num((const OPENSSL_STACK *)&cv); j++) {
-		            CONF_VALUE *nval = OPENSSL_sk_value((const OPENSSL_STACK *)&cv, j);
+		        for (j = 0; j < OPENSSL_sk_num((const OPENSSL_STACK *)cv); j++) {
+		            CONF_VALUE *nval = OPENSSL_sk_value((const OPENSSL_STACK *)cv, j);
 		            size_t ln = (nval->name ? strlen(nval->name) : 0),
 		        	   lv = (nval->value ? strlen(nval->value) : 0),
 		        	   l = ln + lv;
@@ -452,7 +452,7 @@ int
 lws_x509_verify(struct lws_x509_cert *x509, struct lws_x509_cert *trusted,
 		const char *common_name)
 {
-	char c[32], *p;
+	char c[256], *p;
 	int ret;
 
 	if (common_name) {
