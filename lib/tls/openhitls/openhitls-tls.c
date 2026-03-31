@@ -28,32 +28,29 @@
 #include "private-lib-tls.h"
 #include "private.h"
 
-static int openhitls_contexts_using_global_init;
-
 void
 lws_tls_err_describe_clear(void)
 {
 	const char *file = NULL;
 	uint32_t line = 0;
 	int32_t err;
-	unsigned int n = 0;
 
-	while ((err = BSL_ERR_GetErrorFileLine(&file, &line)) != BSL_SUCCESS) {
+	do {
+		err = BSL_ERR_PeekErrorFileLine(&file, &line);
+		if (!err) {
+			break;
+		}
+
+		BSL_ERR_GetErrorFileLine(&file, &line);
 		lwsl_info("   openhitls error: 0x%x (%s:%u)\n",
 			  (unsigned int)err, file ? file : "?",
 			  (unsigned int)line);
-		if (++n == 32) {
-			lwsl_info("   openhitls error: too many entries, clearing remainder\n");
-			BSL_ERR_ClearError();
-			break;
-		}
-	}
-
-	if (n)
-		lwsl_info("\n");
+	} while (err);
+	lwsl_info("\n");
 }
 
 #if LWS_MAX_SMP != 1
+
 static void
 lws_openssl_lock_callback(int mode, int type, const char *file, int line)
 {
@@ -63,9 +60,7 @@ lws_openssl_lock_callback(int mode, int type, const char *file, int line)
 	(void)mode;
 	(void)type;
 }
-#endif
 
-#if LWS_MAX_SMP != 1
 static unsigned long
 lws_openssl_thread_id(void)
 {
@@ -75,64 +70,54 @@ lws_openssl_thread_id(void)
 #endif
 
 int
-lws_context_init_ssl_library(struct lws_context *context,
-			     const struct lws_context_creation_info *info)
+lws_context_init_ssl_library(struct lws_context *cx,
+                             const struct lws_context_creation_info *info)
 {
 	int ret;
 
-	lwsl_cx_info(context, " Compiled with OpenHiTLS support");
-
+	lwsl_cx_info(cx, " Compiled with OpenHiTLS support");
 	if (!lws_check_opt(info->options, LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT)) {
-		lwsl_cx_info(context, " SSL disabled: no "
-			     "LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT");
+		lwsl_cx_info(cx, " SSL disabled: no "
+			"LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT");
 		return 0;
 	}
 
-	if (openhitls_contexts_using_global_init++) {
-		lwsl_cx_info(context, " OpenHiTLS global init refcount=%d",
-			     openhitls_contexts_using_global_init);
-		return 0;
-	}
+	lwsl_cx_info(cx, "Doing SSL library init");
 
 	ret = BSL_ERR_Init();
 	if (ret != BSL_SUCCESS) {
-		lwsl_cx_err(context, "BSL_ERR_Init failed: 0x%x", ret);
-		openhitls_contexts_using_global_init--;
-		return -1;
+		lwsl_cx_err(cx, "BSL_ERR_Init failed: 0x%x", ret);
 	}
 
 	ret = CRYPT_EAL_Init(CRYPT_EAL_INIT_ALL);
 	if (ret != CRYPT_SUCCESS) {
-		lwsl_cx_err(context, "CRYPT_EAL_Init failed: 0x%x", ret);
-		BSL_ERR_DeInit();
-		openhitls_contexts_using_global_init--;
-		return -1;
+		lwsl_cx_err(cx, "CRYPT_EAL_Init failed: 0x%x", ret);
 	}
 
-	lwsl_cx_info(context, " OpenHiTLS global init done");
+#if defined(LWS_WITH_NETWORK)
+	/* OpenHiTLS does not require ex indexes like OpenSSL */
+#endif
+
+#if LWS_MAX_SMP != 1
+		/*
+		 * OpenHiTLS does not support this locking mechanism
+		 */
+
+		(void)lws_openssl_thread_id;
+		(void)lws_openssl_lock_callback;
+#endif
+
 	return 0;
 }
 
 void
 lws_context_deinit_ssl_library(struct lws_context *context)
 {
+#if LWS_MAX_SMP != 1
 	if (!lws_check_opt(context->options,
 			   LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT))
 		return;
-
-	if (!openhitls_contexts_using_global_init) {
-		lwsl_cx_warn(context, " OpenHiTLS deinit with zero refcount");
-		return;
-	}
-
-	if (--openhitls_contexts_using_global_init) {
-		lwsl_cx_info(context, " OpenHiTLS global deinit deferred, refcount=%d",
-			     openhitls_contexts_using_global_init);
-		return;
-	}
-
-	CRYPT_EAL_Cleanup(CRYPT_EAL_INIT_ALL);
-	BSL_ERR_DeInit();
-
-	lwsl_cx_info(context, " OpenHiTLS global deinit done");
+#endif
+	(void)context;
+	/* OpenHiTLS does not require global cleanup */
 }

@@ -28,9 +28,6 @@
 #include "private-lib-tls.h"
 #include "private.h"
 
-int openhitls_websocket_private_data_index,
-    openhitls_SSL_CTX_private_data_index;
-
 #ifndef SSL_CB_HANDSHAKE_START
 #define SSL_CB_HANDSHAKE_START	0x10
 #endif
@@ -41,49 +38,47 @@ int openhitls_websocket_private_data_index,
 #define SSL_CB_ALERT		0x4000
 #endif
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-static _Thread_local lws_tls_conn *lws_openhitls_verify_ssl_tls;
-#else
-static lws_tls_conn *lws_openhitls_verify_ssl_tls;
-#endif
-
 /*
  * BSL_UIO helper functions
  */
-
-uint32_t
-lws_openhitls_pending_bytes(struct lws *wsi)
-{
-	if (!wsi || !wsi->tls.ssl)
-		return 0;
-
-	return HITLS_GetReadPendingBytes(wsi->tls.ssl);
-}
-
-void
-lws_openhitls_verify_bind(lws_tls_conn *ssl)
-{
-	lws_openhitls_verify_ssl_tls = ssl;
-}
-
-void
-lws_openhitls_verify_unbind(void)
-{
-	lws_openhitls_verify_ssl_tls = NULL;
-}
-
-lws_tls_conn *
-lws_openhitls_verify_get_ssl(void)
-{
-	return lws_openhitls_verify_ssl_tls;
-}
 
 int
 lws_openhitls_describe_cipher(struct lws *wsi)
 {
 #if !defined(LWS_WITH_NO_LOGS)
-	/* OpenHiTLS does not have equivalent cipher description API */
-	lwsl_info("%s: cipher info not available\n", __func__);
+	const HITLS_Cipher *cipher;
+	const char *desc = "";
+	const char *name = "(NONE)";
+	const char *std_name = "(NONE)";
+	uint8_t desc_buf[160] = {0};
+	int32_t version = 0;
+
+	if (!wsi || !wsi->tls.ssl) {
+		return 0;
+	}
+
+	cipher = HITLS_GetCurrentCipher(wsi->tls.ssl);
+	if (!cipher) {
+		lwsl_info("%s: %s: no negotiated cipher\n", __func__,
+			  lws_wsi_tag(wsi));
+		return 0;
+	}
+
+	if (HITLS_CFG_GetCipherSuiteName(cipher)) {
+		name = (const char *)HITLS_CFG_GetCipherSuiteName(cipher);
+	}
+	if (HITLS_CFG_GetCipherSuiteStdName(cipher)) {
+		std_name = (const char *)HITLS_CFG_GetCipherSuiteStdName(cipher);
+	}
+	if (HITLS_CFG_GetDescription(cipher, desc_buf,
+				     (int32_t)sizeof(desc_buf)) == HITLS_SUCCESS &&
+	    desc_buf[0]) {
+		desc = (const char *)desc_buf;
+	}
+	(void)HITLS_CFG_GetCipherVersion(cipher, &version);
+
+	lwsl_info("%s: %s: %s, %s, 0x%x, %s\n", __func__, lws_wsi_tag(wsi),
+		  name, std_name, (unsigned int)version, desc);
 #endif
 	return 0;
 }
@@ -91,15 +86,25 @@ lws_openhitls_describe_cipher(struct lws *wsi)
 int
 lws_ssl_get_error(struct lws *wsi, int n)
 {
-	int m = lws_openhitls_error_to_lws(n);
+	if (!wsi || !wsi->tls.ssl) {
+		return 99;
+	}
 
-	if (m == LWS_SSL_CAPABLE_ERROR) {
-		lwsl_debug("%s: %p 0x%x -> %d (errno %d)\n", __func__,
-			   wsi ? (void *)wsi->tls.ssl : NULL, n, m, LWS_ERRNO);
+	n = HITLS_GetError(wsi->tls.ssl, n);
+
+	if (n == HITLS_ERR_TLS || n == HITLS_ERR_SYSCALL) {
+		const char *desc = BSL_ERR_GetString(n);
+
+		lwsl_debug("%s: %p 0x%x (errno %d)\n", __func__,
+			   (void *)wsi->tls.ssl, n, LWS_ERRNO);
+		if (!wsi->tls.err_helper[0] && desc && desc[0]) {
+			lws_strncpy(wsi->tls.err_helper, desc,
+							    sizeof(wsi->tls.err_helper));
+		}
 		lws_tls_err_describe_clear();
 	}
 
-	return m;
+	return n;
 }
 
 #if defined(LWS_WITH_SERVER)
@@ -107,20 +112,12 @@ static int32_t
 lws_context_init_ssl_pem_passwd_cb(char *buf, int32_t bufLen, int32_t flag,
 				   void *userdata)
 {
-	const struct lws_context_creation_info *info =
-			(const struct lws_context_creation_info *)userdata;
-	const char *p;
+	struct lws_context_creation_info *info =
+			(struct lws_context_creation_info *)userdata;
 
 	(void)flag;
 
-	if (!buf || bufLen < 2 || !info)
-		return 0;
-
-	p = info->ssl_private_key_password;
-	if (!p)
-		p = "";
-
-	lws_strncpy(buf, p, (size_t)bufLen);
+	lws_strncpy(buf, info->ssl_private_key_password, (size_t)bufLen);
 
 	return (int32_t)strlen(buf);
 }
@@ -131,20 +128,16 @@ static int32_t
 lws_context_init_ssl_pem_passwd_client_cb(char *buf, int32_t bufLen, int32_t flag,
 					  void *userdata)
 {
-	const struct lws_context_creation_info *info =
-			(const struct lws_context_creation_info *)userdata;
+	struct lws_context_creation_info *info =
+			(struct lws_context_creation_info *)userdata;
 	const char *p;
 
 	(void)flag;
 
-	if (!buf || bufLen < 2 || !info)
-		return 0;
-
 	p = info->ssl_private_key_password;
-	if (info->client_ssl_private_key_password)
+	if (info->client_ssl_private_key_password) {
 		p = info->client_ssl_private_key_password;
-	if (!p)
-		p = "";
+	}
 
 	lws_strncpy(buf, p, (size_t)bufLen);
 
@@ -157,61 +150,56 @@ lws_ssl_bind_passphrase(lws_tls_ctx *ssl_ctx, int is_client,
 			const struct lws_context_creation_info *info)
 {
 	HITLS_Config *config;
-	int ret;
-
-	if (!ssl_ctx || !info)
-		return;
-
-	config = is_client ? ssl_ctx->client_config : ssl_ctx->config;
-	if (!config)
-		return;
 
 	if (
 #if defined(LWS_WITH_SERVER)
 		!info->ssl_private_key_password
 #endif
 #if defined(LWS_WITH_SERVER) && defined(LWS_WITH_CLIENT)
-		&&
+			&&
 #endif
 #if defined(LWS_WITH_CLIENT)
-		!info->client_ssl_private_key_password
+	    !info->client_ssl_private_key_password
 #endif
-	    )
-		return;
-
-	ret = HITLS_CFG_SetDefaultPasswordCbUserdata(config, (void *)info);
-	if (ret != HITLS_SUCCESS) {
-		lwsl_warn("%s: HITLS_CFG_SetDefaultPasswordCbUserdata failed: 0x%x\n",
-			  __func__, ret);
+		    )
+		{
 		return;
 	}
 
-	ret = HITLS_CFG_SetDefaultPasswordCb(config, is_client ?
-					     lws_context_init_ssl_pem_passwd_client_cb :
-					     lws_context_init_ssl_pem_passwd_cb);
-	if (ret != HITLS_SUCCESS)
-		lwsl_warn("%s: HITLS_CFG_SetDefaultPasswordCb failed: 0x%x\n",
-			  __func__, ret);
+	config = ssl_ctx;
+	/*
+	 * password provided, set ssl callback and user data
+	 * for checking password which will be trigered during
+	 * HITLS_CFG_UsePrivateKeyFile function
+	 */
+	HITLS_CFG_SetDefaultPasswordCbUserdata(config, (void *)info);
+	HITLS_CFG_SetDefaultPasswordCb(config, is_client ?
+#if defined(LWS_WITH_CLIENT)
+				      lws_context_init_ssl_pem_passwd_client_cb:
+#else
+					NULL:
+#endif
+#if defined(LWS_WITH_SERVER)
+				      lws_context_init_ssl_pem_passwd_cb
+#else
+				      	NULL
+#endif
+				  );
 }
 
 #if defined(LWS_WITH_CLIENT)
 static void
 lws_ssl_destroy_client_ctx(struct lws_vhost *vhost)
 {
-	if (vhost->tls.user_supplied_ssl_ctx || !vhost->tls.ssl_client_ctx)
+	if (vhost->tls.user_supplied_ssl_ctx || !vhost->tls.ssl_client_ctx) {
 		return;
-
-	if (vhost->tls.tcr && --vhost->tls.tcr->refcount)
-		return;
-
-	lws_tls_ctx *ctx = (lws_tls_ctx *)vhost->tls.ssl_client_ctx;
-
-	if (ctx->client_config) {
-		HITLS_CFG_FreeConfig(ctx->client_config);
-		ctx->client_config = NULL;
 	}
 
-	lws_free(ctx);
+	if (vhost->tls.tcr && --vhost->tls.tcr->refcount) {
+		return;
+	}
+
+	HITLS_CFG_FreeConfig(vhost->tls.ssl_client_ctx);
 	vhost->tls.ssl_client_ctx = NULL;
 
 	vhost->context->tls.count_client_contexts--;
@@ -227,14 +215,21 @@ lws_ssl_destroy_client_ctx(struct lws_vhost *vhost)
 void
 lws_ssl_destroy(struct lws_vhost *vhost)
 {
-	if (!vhost || !vhost->context)
-		return;
-
 	if (!lws_check_opt(vhost->context->options,
-			   LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT))
+			   LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT)) {
 		return;
+	}
 
-	lws_ssl_SSL_CTX_destroy(vhost);
+	if (vhost->tls.ssl_ctx) {
+		lws_tls_ctx *ctx = vhost->tls.ssl_ctx;
+
+		HITLS_CFG_FreeConfig(ctx);
+		vhost->tls.ssl_ctx = NULL;
+	}
+
+#if defined(LWS_WITH_CLIENT)
+	lws_ssl_destroy_client_ctx(vhost);
+#endif
 }
 
 int
@@ -243,129 +238,161 @@ lws_ssl_capable_read(struct lws *wsi, unsigned char *buf, size_t len)
 	struct lws_context *context = wsi->a.context;
 	struct lws_context_per_thread *pt = &context->pt[(int)wsi->tsi];
 	uint32_t readlen = 0;
-	int ret, m;
+	int ret, n, m;
 
 	if (!wsi->tls.ssl)
 		return lws_ssl_capable_read_no_ssl(wsi, buf, len);
 
-	ret = HITLS_Read(wsi->tls.ssl, buf, (uint32_t)len, &readlen);
-
-	if (ret == HITLS_SUCCESS) {
-#if defined(LWS_WITH_SYS_METRICS)
-		if (wsi->a.vhost)
-			lws_metric_event(wsi->a.vhost->mt_traffic_rx,
-					 METRES_GO, (u_mt_t)readlen);
+#ifndef WIN32
+	errno = 0;
+#else
+	WSASetLastError(0);
 #endif
-		/*
-		 * If the user's buffer limited the read, schedule another
-		 * service pass when OpenHiTLS still has decrypted plaintext.
-		 */
-		if (readlen != len || !wsi->tls.ssl)
-			goto bail;
+	ret = HITLS_Read(wsi->tls.ssl, buf, (uint32_t)len, &readlen);
+#if defined(LWS_PLAT_FREERTOS)
+	if (ret != HITLS_SUCCESS && errno == LWS_ENOTCONN) {
+		lwsl_debug("%s: SSL_read ENOTCONN\n", lws_wsi_tag(wsi));
+		return LWS_SSL_CAPABLE_ERROR;
+	}
+#endif
+	lwsl_debug("%s: SSL_read says %d\n", lws_wsi_tag(wsi), ret);
 
-		if (lws_openhitls_pending_bytes(wsi)) {
-			if (lws_dll2_is_detached(&wsi->tls.dll_pending_tls))
-				lws_dll2_add_head(&wsi->tls.dll_pending_tls,
-						  &pt->tls.dll_pending_tls_owner);
-		} else
-			__lws_ssl_remove_wsi_from_buffered_list(wsi);
+	/* Translate HITLS error into a generic error code, then handle */
+	n = (ret == HITLS_SUCCESS) ? (int)readlen : 0;
 
-		return (int)readlen;
+	if (n <= 0) {
+		m = lws_ssl_get_error(wsi, ret);
+		lwsl_debug("%s: ssl err %d errno %d\n", lws_wsi_tag(wsi), m, LWS_ERRNO);
+		/* unclean, eg closed conn */
+		if (m == HITLS_ERR_TLS || m == HITLS_ERR_SYSCALL ||
+		    LWS_ERRNO == LWS_ENOTCONN) {
+			wsi->socket_is_permanently_unusable = 1;
+#if defined(LWS_WITH_SYS_METRICS)
+			if (wsi->a.vhost)
+				lws_metric_event(wsi->a.vhost->mt_traffic_rx,
+						 METRES_NOGO, 0);
+#endif
+			return LWS_SSL_CAPABLE_ERROR;
+		}
+
+		/* retryable */
+		if (m == HITLS_WANT_READ) {
+			lwsl_debug("%s: WANT_READ\n", __func__);
+			lwsl_debug("%s: LWS_SSL_CAPABLE_MORE_SERVICE\n", lws_wsi_tag(wsi));
+			return LWS_SSL_CAPABLE_MORE_SERVICE;
+		}
+		if (m == HITLS_WANT_WRITE) {
+			lwsl_info("%s: WANT_WRITE\n", __func__);
+			lwsl_debug("%s: LWS_SSL_CAPABLE_MORE_SERVICE\n", lws_wsi_tag(wsi));
+			wsi->tls_read_wanted_write = 1;
+			lws_callback_on_writable(wsi);
+			return LWS_SSL_CAPABLE_MORE_SERVICE;
+		}
+
+		/* keep on trucking it seems */
 	}
 
-	/* Handle non-blocking and error cases */
-	m = lws_ssl_get_error(wsi, ret);
+#if defined(LWS_TLS_LOG_PLAINTEXT_RX)
+	/*
+	 * If using openssl type tls library, this is the earliest point for all
+	 * paths to dump what was received as decrypted data from the tls tunnel
+	 */
+	lwsl_notice("%s: len %d\n", __func__, n);
+	lwsl_hexdump_notice(buf, (size_t)n);
+#endif
 
-	switch (m) {
-	case LWS_SSL_CAPABLE_MORE_SERVICE_READ:
-		lwsl_debug("%s: WANT_READ\n", __func__);
-		return LWS_SSL_CAPABLE_MORE_SERVICE;
-
-	case LWS_SSL_CAPABLE_MORE_SERVICE_WRITE:
-		lwsl_info("%s: WANT_WRITE during read\n", __func__);
-		wsi->tls_read_wanted_write = 1;
-		lws_callback_on_writable(wsi);
-		return LWS_SSL_CAPABLE_MORE_SERVICE;
-
-	case LWS_SSL_CAPABLE_DONE:
-		/* Connection closed cleanly */
-		lwsl_debug("%s: connection closed\n", __func__);
-		goto do_err;
-
-	default:
-		/* Error case */
-		lwsl_debug("%s: read error: 0x%x (mapped %d)\n", __func__,
-			   ret, m);
-		goto do_err;
-	}
-
-do_err:
-	wsi->socket_is_permanently_unusable = 1;
 #if defined(LWS_WITH_SYS_METRICS)
 	if (wsi->a.vhost)
-		lws_metric_event(wsi->a.vhost->mt_traffic_rx, METRES_NOGO, 0);
+		lws_metric_event(wsi->a.vhost->mt_traffic_rx,
+				 METRES_GO, (u_mt_t)n);
 #endif
-	__lws_ssl_remove_wsi_from_buffered_list(wsi);
-	return LWS_SSL_CAPABLE_ERROR;
 
+	/*
+	 * if it was our buffer that limited what we read,
+	 * check if SSL has additional data pending inside SSL buffers.
+	 *
+	 * Because these won't signal at the network layer with POLLIN
+	 * and if we don't realize, this data will sit there forever
+	 */
+	if (n != (int)len)
+		goto bail;
+	if (!wsi->tls.ssl)
+		goto bail;
+
+	if (HITLS_GetReadPendingBytes(wsi->tls.ssl)) {
+		if (lws_dll2_is_detached(&wsi->tls.dll_pending_tls))
+			lws_dll2_add_head(&wsi->tls.dll_pending_tls,
+					  &pt->tls.dll_pending_tls_owner);
+	} else
+		__lws_ssl_remove_wsi_from_buffered_list(wsi);
+
+	return n;
 bail:
 	lws_ssl_remove_wsi_from_buffered_list(wsi);
 
-	return (int)readlen;
+	return n;
 }
 
 int
 lws_ssl_pending(struct lws *wsi)
 {
-	if (!wsi->tls.ssl)
+	if (!wsi->tls.ssl) {
 		return 0;
+	}
 
-	return (int)lws_openhitls_pending_bytes(wsi);
+	return (int)HITLS_GetReadPendingBytes(wsi->tls.ssl);
 }
 
 int
 lws_ssl_capable_write(struct lws *wsi, unsigned char *buf, size_t len)
 {
 	uint32_t writelen = 0;
-	int ret, m;
+	int ret;
 
-	if (!wsi->tls.ssl)
+#if defined(LWS_TLS_LOG_PLAINTEXT_TX)
+	lwsl_notice("%s: len %u\n", __func__, (unsigned int)len);
+	lwsl_hexdump_notice(buf, len);
+#endif
+
+	if (!wsi->tls.ssl) {
 		return lws_ssl_capable_write_no_ssl(wsi, buf, len);
+	}
 
 	ret = HITLS_Write(wsi->tls.ssl, buf, (uint32_t)len, &writelen);
 
 	if (ret == HITLS_SUCCESS) {
 #if defined(LWS_WITH_SYS_METRICS)
-		if (wsi->a.vhost)
+		if (wsi->a.vhost) {
 			lws_metric_event(wsi->a.vhost->mt_traffic_tx,
-					 METRES_GO, (u_mt_t)writelen);
+									 METRES_GO, (u_mt_t)writelen);
+		}
 #endif
 		return (int)writelen;
 	}
 
 	/* Handle non-blocking and error cases */
-	m = lws_ssl_get_error(wsi, ret);
+	ret = lws_ssl_get_error(wsi, ret);
+	if (ret != HITLS_ERR_SYSCALL) {
+		if (ret == HITLS_WANT_READ) {
+			lwsl_notice("%s: want read during write\n", __func__);
+			return LWS_SSL_CAPABLE_MORE_SERVICE;
+		}
 
-	switch (m) {
-	case LWS_SSL_CAPABLE_MORE_SERVICE_READ:
-		lwsl_notice("%s: want read during write\n", __func__);
-		return LWS_SSL_CAPABLE_MORE_SERVICE;
-
-	case LWS_SSL_CAPABLE_MORE_SERVICE_WRITE:
-		lws_set_blocking_send(wsi);
-		lwsl_debug("%s: want write\n", __func__);
-		return LWS_SSL_CAPABLE_MORE_SERVICE;
-
-	default:
-		lwsl_debug("%s: write error: 0x%x (mapped %d)\n", __func__,
-			   ret, m);
-		break;
+		if (ret == HITLS_WANT_WRITE) {
+			lws_set_blocking_send(wsi);
+			lwsl_debug("%s: want write\n", __func__);
+			return LWS_SSL_CAPABLE_MORE_SERVICE;
+		}
 	}
+
+	lwsl_debug("%s: write error: 0x%x\n", __func__, ret);
+	lws_tls_err_describe_clear();
 
 	wsi->socket_is_permanently_unusable = 1;
 #if defined(LWS_WITH_SYS_METRICS)
-	if (wsi->a.vhost)
+	if (wsi->a.vhost) {
 		lws_metric_event(wsi->a.vhost->mt_traffic_tx, METRES_NOGO, 0);
+	}
 #endif
 	return LWS_SSL_CAPABLE_ERROR;
 }
@@ -373,32 +400,51 @@ lws_ssl_capable_write(struct lws *wsi, unsigned char *buf, size_t len)
 void
 lws_ssl_info_callback(const lws_tls_conn *ssl, int where, int ret)
 {
-	struct lws *wsi = (struct lws *)HITLS_GetUserData((HITLS_Ctx *)ssl);
+	struct lws *wsi;
+	struct lws_context *context;
 	struct lws_ssl_info si;
 
-	if (!wsi || !wsi->a.vhost || !wsi->a.protocol)
+	context = (struct lws_context *)HITLS_CFG_GetConfigUserData(HITLS_GetConfig(ssl));
+	if (!context)
 		return;
+	BSL_UIO *uio = HITLS_GetUio(ssl);
+	int fd = BSL_UIO_Ctrl(uio, BSL_UIO_GET_FD, 0, NULL);
+	if (fd < 0 || (fd - lws_plat_socket_offset()) < 0) {
+		return;
+	}
 
-	if (!(where & wsi->a.vhost->tls.ssl_info_event_mask))
+	wsi = wsi_from_fd(context, fd);
+	if (!wsi){
 		return;
+	}
+		
+	if (!(where & wsi->a.vhost->tls.ssl_info_event_mask)) {
+		return;
+	}
 
 	si.where = where;
 	si.ret = ret;
 
 	if (user_callback_handle_rxflow(wsi->a.protocol->callback,
 					wsi, LWS_CALLBACK_SSL_INFO,
-					wsi->user_space, &si, 0))
+					wsi->user_space, &si, 0)) {
 		lws_set_timeout(wsi, PENDING_TIMEOUT_KILLED_BY_SSL_INFO, -1);
+	}
 }
 
 int
 lws_ssl_close(struct lws *wsi)
 {
-	if (!wsi->tls.ssl)
-		return 0; /* not handled */
+	lws_sockfd_type n;
+	BSL_UIO *uio;
 
-	if (wsi->a.vhost->tls.ssl_info_event_mask)
+	if (!wsi->tls.ssl) {
+		return 0;
+	} /* not handled */
+
+	if (wsi->a.vhost->tls.ssl_info_event_mask) {
 		(void)HITLS_SetInfoCb(wsi->tls.ssl, NULL);
+	}
 
 #if defined(LWS_TLS_SYNTHESIZE_CB)
 	lws_sul_cancel(&wsi->tls.sul_cb_synth);
@@ -406,28 +452,17 @@ lws_ssl_close(struct lws *wsi)
 #endif
 
 	/*
-	 * Graceful shutdown - send close notify
-	 * HITLS_Close sends the close_notify alert
+	 * Get the fd before any cleanup that may invalidate it.
 	 */
-	if (!wsi->socket_is_permanently_unusable) {
-		int ret = HITLS_Close(wsi->tls.ssl);
-		if (ret != HITLS_SUCCESS && ret != HITLS_WANT_WRITE) {
-			lwsl_debug("%s: HITLS_Close: 0x%x\n", __func__, ret);
-		}
-	}
+	uio = HITLS_GetUio(wsi->tls.ssl);
+	BSL_UIO_Ctrl(uio, BSL_UIO_GET_FD, sizeof(lws_sockfd_type), &n);
 
-	/* Free the BSL_UIO that we attached */
-	{
-		BSL_UIO *uio = HITLS_GetUio(wsi->tls.ssl);
-		if (uio)
-			BSL_UIO_Free(uio);
-	}
+	
 
-	(void)HITLS_SetUserData(wsi->tls.ssl, NULL);
+	if (lws_socket_is_valid(n))
+		compatible_close(n);
 	HITLS_Free(wsi->tls.ssl);
 	wsi->tls.ssl = NULL;
-
-	__lws_ssl_remove_wsi_from_buffered_list(wsi);
 	lws_tls_restrict_return(wsi);
 
 	return 1; /* handled */
@@ -439,12 +474,9 @@ lws_ssl_SSL_CTX_destroy(struct lws_vhost *vhost)
 	if (vhost->tls.ssl_ctx) {
 		lws_tls_ctx *ctx = (lws_tls_ctx *)vhost->tls.ssl_ctx;
 
-		if (ctx->config) {
-			HITLS_CFG_FreeConfig(ctx->config);
-			ctx->config = NULL;
+		if (ctx) {
+			HITLS_CFG_FreeConfig(ctx);
 		}
-
-		lws_free(ctx);
 		vhost->tls.ssl_ctx = NULL;
 	}
 
@@ -468,43 +500,49 @@ lws_ssl_context_destroy(struct lws_context *context)
 lws_tls_ctx *
 lws_tls_ctx_from_wsi(struct lws *wsi)
 {
-	if (!wsi->tls.ssl)
+	if (!wsi->tls.ssl) {
 		return NULL;
+	}
 
-	if (wsi->a.vhost)
-		return (lws_tls_ctx *)wsi->a.vhost->tls.ssl_ctx;
-
-	return NULL;
+	return (lws_tls_ctx *)HITLS_GetGlobalConfig(wsi->tls.ssl);
 }
 
 enum lws_ssl_capable_status
 __lws_tls_shutdown(struct lws *wsi)
 {
 	int ret;
-
-	if (!wsi->tls.ssl)
+	uint32_t state = 0;
+	if (!wsi->tls.ssl) {
 		return LWS_SSL_CAPABLE_ERROR;
+	}
 
 	ret = HITLS_Close(wsi->tls.ssl);
 	lwsl_debug("%s: HITLS_Close=%d for fd %d\n", __func__, ret,
 		   wsi->desc.sockfd);
+	HITLS_GetShutdownState(wsi->tls.ssl, &state);
 
-	switch (ret) {
-	case HITLS_SUCCESS:
+	if (state == (HITLS_SENT_SHUTDOWN | HITLS_RECEIVED_SHUTDOWN)) {
 		shutdown(wsi->desc.sockfd, SHUT_WR);
 		return LWS_SSL_CAPABLE_DONE;
-
-	case HITLS_WANT_READ:
+	}
+	if (state == HITLS_SENT_SHUTDOWN) {
 		__lws_change_pollfd(wsi, 0, LWS_POLLIN);
 		return LWS_SSL_CAPABLE_MORE_SERVICE_READ;
-
-	case HITLS_WANT_WRITE:
-		__lws_change_pollfd(wsi, 0, LWS_POLLOUT);
-		return LWS_SSL_CAPABLE_MORE_SERVICE_WRITE;
-
-	default:
-		return LWS_SSL_CAPABLE_ERROR;
 	}
+	int error = HITLS_GetError(wsi->tls.ssl, ret);
+	if (error != HITLS_ERR_SYSCALL && error != HITLS_ERR_TLS) {
+		if (error == HITLS_WANT_READ) {
+			lwsl_debug("(wants read)\n");
+			__lws_change_pollfd(wsi, 0, LWS_POLLIN);
+			return LWS_SSL_CAPABLE_MORE_SERVICE_READ;
+		}
+		if (error == HITLS_WANT_WRITE) {
+			lwsl_debug("(wants write)\n");
+			__lws_change_pollfd(wsi, 0, LWS_POLLOUT);
+			return LWS_SSL_CAPABLE_MORE_SERVICE_WRITE;
+		}
+	}
+	return LWS_SSL_CAPABLE_ERROR;
 }
 
 static int
