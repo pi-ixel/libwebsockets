@@ -19,6 +19,14 @@
 #include <string.h>
 #include <signal.h>
 
+#ifndef LWS_TEST_SERVER_CERT_PEM
+#define LWS_TEST_SERVER_CERT_PEM "libwebsockets-test-server.pem"
+#endif
+
+#ifndef LWS_TEST_SERVER_KEY_PEM
+#define LWS_TEST_SERVER_KEY_PEM "libwebsockets-test-server.key.pem"
+#endif
+
 static int interrupted, bad, completed, server_only;
 static lws_state_notify_link_t nl;
 static struct lws_context *context;
@@ -240,9 +248,9 @@ int main(int argc, const char **argv)
 		if (p)
 			info.port = atoi(p);
 		info.ssl_cert_filepath =
-			"libwebsockets-test-server.pem";
+			LWS_TEST_SERVER_CERT_PEM;
 		info.ssl_private_key_filepath =
-			"libwebsockets-test-server.key.pem";
+			LWS_TEST_SERVER_KEY_PEM;
 		info.options |=
 			LWS_SERVER_OPTION_REQUIRE_VALID_OPENSSL_CLIENT_CERT;
 		/*
@@ -250,7 +258,7 @@ int main(int argc, const char **argv)
 		 * that signed the repo's self-signed cert.
 		 */
 		info.ssl_ca_filepath =
-			"libwebsockets-test-server.pem";
+			LWS_TEST_SERVER_CERT_PEM;
 		info.mounts = &mount;
 		lwsl_user("  Embedded mTLS server on port %d\n", info.port);
 	} else if (server_only) {

@@ -117,6 +117,10 @@ int main(int argc, const char **argv)
 	info.port = 7681;
 	if ((p = lws_cmdline_option(argc, argv, switches[LWS_SW_PORT].sw)))
 		info.port = atoi(p);
+	if ((p = lws_cmdline_option(argc, argv, "--ssl-option-set")))
+		info.ssl_options_set = strtol(p, NULL, 0);
+	if ((p = lws_cmdline_option(argc, argv, "--ssl-option-clear")))
+		info.ssl_options_clear = strtol(p, NULL, 0);
 	info.mounts = &mount;
 	info.error_document_404 = "/404.html";
 	info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT |
