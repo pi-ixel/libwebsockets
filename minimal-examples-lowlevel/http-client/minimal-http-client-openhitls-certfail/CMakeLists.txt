@@ -19,6 +19,9 @@ require_lws_config(LWS_WITH_FILE_OPS 1 requirements)
 
 if (requirements)
 	add_executable(${SAMP} ${SRCS})
+	target_compile_definitions(${SAMP} PRIVATE
+		LWS_TEST_SERVER_CERT_PEM="${CMAKE_BINARY_DIR}/libwebsockets-test-server.pem"
+		LWS_TEST_SERVER_KEY_PEM="${CMAKE_BINARY_DIR}/libwebsockets-test-server.key.pem")
 
 	set(PORT_OHCERT_SRV "7750")
 	if ("$ENV{SAI_INSTANCE_IDX}")
