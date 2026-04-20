@@ -100,6 +100,18 @@ static int lws_openhitls_client_ctx_fingerprint(
 		goto bail_hash;
 	}
 
+	if (info->ssl_client_options_set &&
+	    lws_genhash_update(&hash_ctx, &info->ssl_client_options_set,
+			       sizeof(info->ssl_client_options_set))) {
+		goto bail_hash;
+	}
+
+	if (info->ssl_client_options_clear &&
+	    lws_genhash_update(&hash_ctx, &info->ssl_client_options_clear,
+			       sizeof(info->ssl_client_options_clear))) {
+		goto bail_hash;
+	}
+
 	if (!lws_check_opt(vh->options,
 			   LWS_SERVER_OPTION_DISABLE_OS_CA_CERTS) &&
 	    (!ca_mem || !ca_mem_len) && lws_genhash_update(&hash_ctx, &c, 1)) {
@@ -149,14 +161,7 @@ static void lws_openhitls_kid_from_bsl(const BSL_Buffer *b, lws_tls_kid_t *kid)
 {
 	size_t n;
 
-	if (!kid) {
-		return;
-	}
-
 	memset(kid, 0, sizeof(*kid));
-	if (!b || !b->data || !b->dataLen) {
-		return;
-	}
 
 	n = b->dataLen;
 	if (n > sizeof(kid->kid)) {
@@ -173,10 +178,6 @@ static void lws_openhitls_collect_peer_kids(struct lws *wsi,
 	HITLS_X509_List *chain = NULL;
 	BslList *list;
 	BslListNode *node;
-
-	if (!wsi || !store_ctx) {
-		return;
-	}
 
 	if (HITLS_X509_StoreCtxCtrl((HITLS_X509_StoreCtx *)store_ctx,
 				    HITLS_X509_STORECTX_GET_CERT_CHAIN, &chain,
@@ -231,10 +232,6 @@ static void lws_openhitls_collect_peer_kids(struct lws *wsi,
 static int lws_openhitls_store_ctx_set_error(HITLS_CERT_StoreCtx *store_ctx,
 					     int32_t e)
 {
-	if (!store_ctx) {
-		return -1;
-	}
-
 	return HITLS_X509_StoreCtxCtrl((HITLS_X509_StoreCtx *)store_ctx,
 				       HITLS_X509_STORECTX_SET_ERROR, &e,
 				       (uint32_t)sizeof(e)) == HITLS_PKI_SUCCESS
@@ -450,13 +447,7 @@ int lws_ssl_client_bio_create(struct lws *wsi)
 #endif
 
 	if (wsi->a.vhost->tls.ssl_info_event_mask) {
-		ret = HITLS_SetInfoCb(ssl, lws_ssl_info_callback);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_SetInfoCb failed: 0x%x\n", __func__,
-				 ret);
-			HITLS_Free(ssl);
-			return -1;
-		}
+		HITLS_SetInfoCb(ssl, lws_ssl_info_callback);
 	}
 
 	if (!(wsi->tls.use_ssl & LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK)) {
@@ -534,12 +525,7 @@ int lws_ssl_client_bio_create(struct lws *wsi)
     ret = HITLS_SetAlpnProtos(ssl, (uint8_t *)alpn_buf, (uint32_t)n);
 
 	/* OpenHiTLS_client_verify_callback will be called @ HITLS_Connect(). */
-	ret = HITLS_SetUserData(ssl, wsi);
-	if (ret != HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_SetUserData failed: 0x%x\n", __func__, ret);
-		HITLS_Free(ssl);
-		return -1;
-	}
+	HITLS_SetUserData(ssl, wsi);
 
 	wsi->tls.ssl = ssl;
 
@@ -691,9 +677,7 @@ enum lws_ssl_capable_status lws_tls_client_connect(struct lws *wsi,
 	if (!ret) /* we don't know what he wants, but he says to retry */
 		return LWS_SSL_CAPABLE_MORE_SERVICE;
 
-	if (errbuf) {
-		lws_snprintf(errbuf, len, "connect unk %d", m);
-	}
+	lws_snprintf(errbuf, len, "connect unk %d", m);
 
 	return LWS_SSL_CAPABLE_ERROR;
 }
@@ -814,11 +798,18 @@ int lws_tls_client_create_vhost_context(
 		}
 	}lws_end_foreach_dll_safe(p, tp);
 
-	/* Create full TLS config so options_set/clear version mapping can apply
-	 */
 	config = HITLS_CFG_NewTLSConfig();
 	if (!config) {
 		lwsl_err("%s: HITLS_CFG_NewTLSConfig failed\n", __func__);
+		return -1;
+	}
+
+	if (lws_openhitls_apply_tls_version_by_ssl_options(
+			config, info->ssl_client_options_set,
+			info->ssl_client_options_clear, __func__)) {
+		lwsl_err("%s: unable to apply client TLS version options\n",
+			 __func__);
+		HITLS_CFG_FreeConfig(config);
 		return -1;
 	}
 	HITLS_CFG_SetConfigUserData(config, vh->context);
@@ -1017,7 +1008,7 @@ int lws_tls_client_create_vhost_context(
 		}
 	}
 
-	if (private_key_filepath && cert_set) {
+	if ((private_key_filepath || (key_mem && key_mem_len)) && cert_set) {
 		ret = HITLS_CFG_CheckPrivateKey(config);
 		if (ret != HITLS_SUCCESS) {
 			lwsl_err("Private SSL key doesn't match cert\n");

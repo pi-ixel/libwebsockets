@@ -8,6 +8,25 @@
  */
 
 #include <libwebsockets.h>
+
+enum {
+	LWS_SW_D,
+	LWS_SW_C,
+	LWS_SW_T,
+	LWS_SW_ALG,
+	LWS_SW_P,
+	LWS_SW_HELP,
+};
+
+static const struct lws_switches switches[] = {
+	[LWS_SW_D]	= { "-d",              "Set logging verbosity" },
+	[LWS_SW_C]	= { "-c",              "Load the certificate input" },
+	[LWS_SW_T]	= { "-t",              "Select the output operation" },
+	[LWS_SW_ALG]	= { "--alg",           "Select the signing algorithm" },
+	[LWS_SW_P]	= { "-p",              "Load the private key input" },
+	[LWS_SW_HELP]	= { "--help",		"Show this help information" },
+};
+
 #include <stdio.h>
 #include <sys/types.h>
 #include <fcntl.h>

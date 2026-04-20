@@ -15,6 +15,23 @@
  */
 
 #include <libwebsockets.h>
+
+enum {
+	LWS_SW_AMOUNT,
+	LWS_SW_P,
+	LWS_SW_I,
+	LWS_SW_A,
+	LWS_SW_HELP,
+};
+
+static const struct lws_switches switches[] = {
+	[LWS_SW_AMOUNT]	= { "--amount",        "Set the requested payload size" },
+	[LWS_SW_P]	= { "-p",              "Override the policy path" },
+	[LWS_SW_I]	= { "-i",              "Set the client id" },
+	[LWS_SW_A]	= { "-a",              "Set the authorization token" },
+	[LWS_SW_HELP]	= { "--help",		"Show this help information" },
+};
+
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>

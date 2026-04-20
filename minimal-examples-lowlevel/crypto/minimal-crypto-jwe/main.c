@@ -8,6 +8,25 @@
  */
 
 #include <libwebsockets.h>
+
+enum {
+	LWS_SW_D,
+	LWS_SW_E,
+	LWS_SW_K,
+	LWS_SW_F,
+	LWS_SW_C,
+	LWS_SW_HELP,
+};
+
+static const struct lws_switches switches[] = {
+	[LWS_SW_D]	= { "-d",              "Set logging verbosity" },
+	[LWS_SW_E]	= { "-e",              "Encrypt using '<alg> <enc>'" },
+	[LWS_SW_K]	= { "-k",              "Load the JWK from a file" },
+	[LWS_SW_F]	= { "-f",              "Render flattened output" },
+	[LWS_SW_C]	= { "-c",              "Render as a C string literal" },
+	[LWS_SW_HELP]	= { "--help",		"Show this help information" },
+};
+
 #include <stdio.h>
 #include <sys/types.h>
 #include <fcntl.h>

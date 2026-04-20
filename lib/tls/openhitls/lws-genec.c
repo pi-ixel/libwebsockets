@@ -301,7 +301,8 @@ err:
 }
 
 int
-lws_genecdh_set_key(struct lws_genec_ctx *ctx, struct lws_gencrypto_keyelem *el,
+lws_genecdh_set_key(struct lws_genec_ctx *ctx,
+		    const struct lws_gencrypto_keyelem *el,
 		    enum enum_lws_dh_side side)
 {
 	if (ctx->genec_alg != LEGENEC_ECDH)

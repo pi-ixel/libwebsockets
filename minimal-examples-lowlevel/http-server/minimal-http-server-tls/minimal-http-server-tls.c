@@ -17,6 +17,19 @@
  */
 
 #include <libwebsockets.h>
+
+enum {
+	LWS_SW_H,
+	LWS_SW_PORT,
+	LWS_SW_HELP,
+};
+
+static const struct lws_switches switches[] = {
+	[LWS_SW_H]	= { "-h",              "Enable strict Host: checking" },
+	[LWS_SW_PORT]	= { "--port",          "Override the listen port" },
+	[LWS_SW_HELP]	= { "--help",		"Show this help information" },
+};
+
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
@@ -105,6 +118,10 @@ int main(int argc, const char **argv)
 	info.port = 7681;
 	if ((p = lws_cmdline_option(argc, argv, switches[LWS_SW_PORT].sw)))
 		info.port = atoi(p);
+	if ((p = lws_cmdline_option(argc, argv, "--ssl-option-set")))
+		info.ssl_options_set = strtol(p, NULL, 0);
+	if ((p = lws_cmdline_option(argc, argv, "--ssl-option-clear")))
+		info.ssl_options_clear = strtol(p, NULL, 0);
 	info.mounts = &mount;
 	info.error_document_404 = "/404.html";
 	info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT |

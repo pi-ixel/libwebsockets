@@ -155,6 +155,33 @@ lws_tls_openhitls_cert_info(HITLS_X509_Cert *x509, enum lws_tls_cert_info type,
 		CRYPT_EAL_PkeyFreeCtx(pubkey);
 		return 0;
 
+	case LWS_TLS_CERT_INFO_DER_SPKI:
+		ret = HITLS_X509_CertCtrl(x509, HITLS_X509_GET_PUBKEY, &pubkey,
+					  sizeof(CRYPT_EAL_PkeyCtx *));
+		if (ret != HITLS_PKI_SUCCESS) {
+			lwsl_err("%s: HITLS_X509_GET_PUBKEY failed, ret=0x%x\n",
+				 __func__, ret);
+			return -1;
+		}
+		ret = CRYPT_EAL_EncodeBuffKey(pubkey, NULL, BSL_FORMAT_ASN1,
+					      CRYPT_PUBKEY_SUBKEY, &encode);
+		if (ret != CRYPT_SUCCESS) {
+			lwsl_err("%s: CRYPT_EAL_EncodeBuffKey failed, ret=0x%x\n",
+				 __func__, ret);
+			CRYPT_EAL_PkeyFreeCtx(pubkey);
+			return -1;
+		}
+		buf->ns.len = (int)encode.dataLen;
+		if (encode.dataLen > len) {
+			BSL_SAL_Free(encode.data);
+			CRYPT_EAL_PkeyFreeCtx(pubkey);
+			return -1;
+		}
+		memcpy(buf->ns.name, encode.data, encode.dataLen);
+		BSL_SAL_Free(encode.data);
+		CRYPT_EAL_PkeyFreeCtx(pubkey);
+		return 0;
+
 	case LWS_TLS_CERT_INFO_DER_RAW:
 		ret = HITLS_X509_CertCtrl(x509, HITLS_X509_GET_ENCODELEN, &encode.dataLen, sizeof(encode.dataLen));
 		if (ret != HITLS_PKI_SUCCESS) {

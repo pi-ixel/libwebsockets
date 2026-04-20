@@ -551,8 +551,6 @@ CHECK_FUNCTION_EXISTS(${VARIA}SSL_CTX_load_verify_dir LWS_HAVE_SSL_CTX_load_veri
 	endif()
 endif()
 
-endif() # schannel
-
 if (LWS_WITH_MBEDTLS)
 	set(LWS_HAVE_TLS_CLIENT_METHOD 1 PARENT_SCOPE)
 	if (NOT LWS_PLAT_FREERTOS)

@@ -8,6 +8,41 @@
  */
 
 #include <libwebsockets.h>
+
+enum {
+	LWS_SW_D,
+	LWS_SW_STDIN,
+	LWS_SW_STDOUT,
+	LWS_SW_COSE_SIGN,
+	LWS_SW_COSE_SIGN1,
+	LWS_SW_COSE_MAC,
+	LWS_SW_COSE_MAC0,
+	LWS_SW_S,
+	LWS_SW_KID,
+	LWS_SW_KID_HEX,
+	LWS_SW_EXTRA,
+	LWS_SW_K,
+	LWS_SW_ALG,
+	LWS_SW_HELP,
+};
+
+static const struct lws_switches switches[] = {
+	[LWS_SW_D]		= { "-d",              "Set logging verbosity" },
+	[LWS_SW_STDIN]		= { "--stdin",         "Read the input payload from stdin" },
+	[LWS_SW_STDOUT]		= { "--stdout",        "Write the output payload to stdout" },
+	[LWS_SW_COSE_SIGN]	= { "--cose-sign",     "Emit a COSE_Sign object" },
+	[LWS_SW_COSE_SIGN1]	= { "--cose-sign1",    "Emit a COSE_Sign1 object" },
+	[LWS_SW_COSE_MAC]	= { "--cose-mac",      "Emit a COSE_Mac object" },
+	[LWS_SW_COSE_MAC0]	= { "--cose-mac0",     "Emit a COSE_Mac0 object" },
+	[LWS_SW_S]		= { "-s",              "Enable detached payload mode" },
+	[LWS_SW_KID]		= { "--kid",           "Set the key id as text" },
+	[LWS_SW_KID_HEX]	= { "--kid-hex",       "Set the key id as hex" },
+	[LWS_SW_EXTRA]		= { "--extra",         "Provide extra protected header JSON" },
+	[LWS_SW_K]		= { "-k",              "Load the key from a file" },
+	[LWS_SW_ALG]		= { "--alg",           "Select the signing algorithm" },
+	[LWS_SW_HELP]		= { "--help",		"Show this help information" },
+};
+
 #include <stdio.h>
 #include <sys/types.h>
 #include <fcntl.h>

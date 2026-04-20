@@ -42,6 +42,7 @@ Options:
 
 Notes:
   This script owns configure/build decisions.
+  The configure step is always refreshed so changed CMake options take effect.
   Default output directories are build and destdir.
   Use scripts/run-tests.sh to install and run tests from an existing build directory.
 
@@ -234,8 +235,6 @@ if [ "${profile}" = "minimal" ]; then
     "-DLWS_WITH_HTTP2=1"
     "-DLWS_CTEST_INTERNET_AVAILABLE=0"
     "-DLWS_WITH_GENCRYPTO=1"
-    "-DLWS_WITH_JOSE=1"
-    "-DLWS_WITH_COSE=1"
     "-DLWS_ROLE_MQTT=1"
     "-DLWS_WITH_EVENT_LIBS=1"
     "-DLWS_WITH_LIBUV=1"
@@ -253,11 +252,25 @@ if [ "${profile}" = "minimal" ]; then
     "-DLWS_WITH_SELFTESTS=1"
     "-DLWS_WITH_TLS_JIT_TRUST=1"
   )
+  if [ "${tls_choice}" != "openhitls" ]; then
+    cmake_args+=(
+      "-DLWS_WITH_JOSE=1"
+      "-DLWS_WITH_COSE=1"
+    )
+  fi
 fi
-if [ ${#cmake_args[@]} -gt 0 ]; then
-  cmake -S "${repo_root}" -B "${repo_root}/${build_dir}" "${cmake_args[@]}"
+configure_args=()
+if cmake --help 2>/dev/null | grep -q -- '--fresh'; then
+  configure_args+=(--fresh)
 else
-  cmake -S "${repo_root}" -B "${repo_root}/${build_dir}"
+  rm -f "${repo_root}/${build_dir}/CMakeCache.txt"
+  rm -rf "${repo_root}/${build_dir}/CMakeFiles"
+fi
+
+if [ ${#cmake_args[@]} -gt 0 ]; then
+  cmake "${configure_args[@]}" -S "${repo_root}" -B "${repo_root}/${build_dir}" "${cmake_args[@]}"
+else
+  cmake "${configure_args[@]}" -S "${repo_root}" -B "${repo_root}/${build_dir}"
 fi
 cmake --build "${repo_root}/${build_dir}" -- -j"${jobs}"
 
@@ -267,4 +280,3 @@ if [ "${run_ctest}" -eq 1 ]; then
     --destdir "${repo_root}/${destdir_dir}" \
     -t "${jobs}"
 fi
-

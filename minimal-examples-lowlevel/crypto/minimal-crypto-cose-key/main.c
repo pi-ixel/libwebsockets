@@ -8,6 +8,31 @@
  */
 
 #include <libwebsockets.h>
+
+enum {
+	LWS_SW_D,
+	LWS_SW_STDIN,
+	LWS_SW_STDOUT,
+	LWS_SW_KID,
+	LWS_SW_KID_HEX,
+	LWS_SW_KTY,
+	LWS_SW_CURVE,
+	LWS_SW_BITS,
+	LWS_SW_HELP,
+};
+
+static const struct lws_switches switches[] = {
+	[LWS_SW_D]		= { "-d",              "Set logging verbosity" },
+	[LWS_SW_STDIN]		= { "--stdin",         "Read the input payload from stdin" },
+	[LWS_SW_STDOUT]		= { "--stdout",        "Write the output payload to stdout" },
+	[LWS_SW_KID]		= { "--kid",           "Set the key id as text" },
+	[LWS_SW_KID_HEX]	= { "--kid-hex",       "Set the key id as hex" },
+	[LWS_SW_KTY]		= { "--kty",           "Select the key type" },
+	[LWS_SW_CURVE]		= { "--curve",         "Select the EC / OKP curve" },
+	[LWS_SW_BITS]		= { "--bits",          "Set the RSA key size in bits" },
+	[LWS_SW_HELP]		= { "--help",		"Show this help information" },
+};
+
 #include <stdio.h>
 #include <sys/select.h>
 #include <sys/types.h>
