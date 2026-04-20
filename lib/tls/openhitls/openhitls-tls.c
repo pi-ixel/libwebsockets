@@ -87,11 +87,13 @@ lws_context_init_ssl_library(struct lws_context *cx,
 	ret = BSL_ERR_Init();
 	if (ret != BSL_SUCCESS) {
 		lwsl_cx_err(cx, "BSL_ERR_Init failed: 0x%x", ret);
+		return 1;
 	}
 
 	ret = CRYPT_EAL_Init(CRYPT_EAL_INIT_ALL);
 	if (ret != CRYPT_SUCCESS) {
 		lwsl_cx_err(cx, "CRYPT_EAL_Init failed: 0x%x", ret);
+		return 1;
 	}
 
 #if defined(LWS_WITH_NETWORK)
@@ -120,4 +122,42 @@ lws_context_deinit_ssl_library(struct lws_context *context)
 #endif
 	(void)context;
 	/* OpenHiTLS does not require global cleanup */
+}
+
+int
+lws_openhitls_apply_tls_version_by_ssl_options(HITLS_Config *config, long set,
+					       long clear, const char *who)
+{
+	unsigned long long no_tls12 = !!((unsigned long long)set &
+					 (unsigned long long)SSL_OP_NO_TLSv1_2) &&
+				    !((unsigned long long)clear &
+				      (unsigned long long)SSL_OP_NO_TLSv1_2);
+	unsigned long long no_tls13 = !!((unsigned long long)set &
+					 (unsigned long long)SSL_OP_NO_TLSv1_3) &&
+				    !((unsigned long long)clear &
+				      (unsigned long long)SSL_OP_NO_TLSv1_3);
+
+	if (no_tls12 && no_tls13) {
+		lwsl_err("%s: SSL_OP_NO_TLSv1_2 and SSL_OP_NO_TLSv1_3 cannot "
+			 "both be active\n", who);
+		return -1;
+	}
+
+	if (no_tls13) {
+		if (HITLS_CFG_SetVersion(config, HITLS_VERSION_TLS12,
+					 HITLS_VERSION_TLS12) != HITLS_SUCCESS) {
+			lwsl_err("%s: HITLS_CFG_SetVersion(TLS1.2) failed\n",
+				 who);
+			return -1;
+		}
+	} else if (no_tls12) {
+		if (HITLS_CFG_SetVersion(config, HITLS_VERSION_TLS13,
+					 HITLS_VERSION_TLS13) != HITLS_SUCCESS) {
+			lwsl_err("%s: HITLS_CFG_SetVersion(TLS1.3) failed\n",
+				 who);
+			return -1;
+		}
+	}
+
+	return 0;
 }

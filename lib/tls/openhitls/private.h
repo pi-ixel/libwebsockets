@@ -88,16 +88,22 @@ lws_genhash_type_to_hitls_md_id(enum lws_genhash_types hash_type);
 CRYPT_CIPHER_AlgId
 lws_genaes_mode_to_hitls_cipher_id(enum enum_aes_modes mode, size_t keylen);
 
-CRYPT_PKEY_ParaId
-lws_genec_curve_to_hitls_para_id(const char *curve_name);
-
-int
-lws_genec_curve_key_bytes(const char *curve_name);
-
 int
 lws_tls_openhitls_cert_info(HITLS_X509_Cert *x509,
 			    enum lws_tls_cert_info type,
 			    union lws_tls_cert_info_results *buf, size_t len);
+
+#ifndef SSL_OP_NO_TLSv1_2
+#define SSL_OP_NO_TLSv1_2 0x08000000L
+#endif
+
+#ifndef SSL_OP_NO_TLSv1_3
+#define SSL_OP_NO_TLSv1_3 0x20000000L
+#endif
+
+int
+lws_openhitls_apply_tls_version_by_ssl_options(HITLS_Config *config, long set,
+					       long clear, const char *who);
 
 static LWS_INLINE HITLS_Config *
 lws_openhitls_server_config_from_ssl_ctx(void *ssl_ctx)

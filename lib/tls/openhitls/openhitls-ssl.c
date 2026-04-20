@@ -76,10 +76,6 @@ lws_openhitls_describe_cipher(struct lws *wsi)
 int
 lws_ssl_get_error(struct lws *wsi, int n)
 {
-	if (!wsi || !wsi->tls.ssl) {
-		return 99;
-	}
-
 	n = HITLS_GetError(wsi->tls.ssl, n);
 
 	if (n == HITLS_ERR_TLS || n == HITLS_ERR_SYSCALL) {
@@ -306,8 +302,6 @@ lws_ssl_capable_read(struct lws *wsi, unsigned char *buf, size_t len)
 	 */
 	if (n != (int)len)
 		goto bail;
-	if (!wsi->tls.ssl)
-		goto bail;
 
 	if (HITLS_GetReadPendingBytes(wsi->tls.ssl)) {
 		if (lws_dll2_is_detached(&wsi->tls.dll_pending_tls))
@@ -393,21 +387,29 @@ lws_ssl_info_callback(const lws_tls_conn *ssl, int where, int ret)
 	struct lws *wsi;
 	struct lws_context *context;
 	struct lws_ssl_info si;
+	BSL_UIO *uio;
+	lws_sockfd_type fd = LWS_SOCK_INVALID;
 
 	context = (struct lws_context *)HITLS_CFG_GetConfigUserData(HITLS_GetConfig(ssl));
 	if (!context)
 		return;
-	BSL_UIO *uio = HITLS_GetUio(ssl);
-	int fd = BSL_UIO_Ctrl(uio, BSL_UIO_GET_FD, 0, NULL);
+
+	uio = HITLS_GetUio(ssl);
+	if (!uio)
+		return;
+
+	if (BSL_UIO_Ctrl(uio, BSL_UIO_GET_FD, sizeof(fd), &fd) != BSL_SUCCESS)
+		return;
+
 	if (fd < 0 || (fd - lws_plat_socket_offset()) < 0) {
 		return;
 	}
 
 	wsi = wsi_from_fd(context, fd);
-	if (!wsi){
+	if (!wsi || !wsi->a.vhost || !wsi->a.protocol) {
 		return;
 	}
-		
+
 	if (!(where & wsi->a.vhost->tls.ssl_info_event_mask)) {
 		return;
 	}
@@ -464,9 +466,7 @@ lws_ssl_SSL_CTX_destroy(struct lws_vhost *vhost)
 	if (vhost->tls.ssl_ctx) {
 		lws_tls_ctx *ctx = (lws_tls_ctx *)vhost->tls.ssl_ctx;
 
-		if (ctx) {
-			HITLS_CFG_FreeConfig(ctx);
-		}
+		HITLS_CFG_FreeConfig(ctx);
 		vhost->tls.ssl_ctx = NULL;
 	}
 
@@ -502,9 +502,6 @@ __lws_tls_shutdown(struct lws *wsi)
 {
 	int ret;
 	uint32_t state = 0;
-	if (!wsi->tls.ssl) {
-		return LWS_SSL_CAPABLE_ERROR;
-	}
 
 	ret = HITLS_Close(wsi->tls.ssl);
 	lwsl_debug("%s: HITLS_Close=%d for fd %d\n", __func__, ret,

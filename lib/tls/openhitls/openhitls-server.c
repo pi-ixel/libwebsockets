@@ -54,9 +54,17 @@ lws_openhitls_log_error_string(const char *prefix, const char *subject,
 		 (unsigned int)err, (s && *s) ? s : "unknown");
 }
 
+/*
+ * OpenHiTLS verify callback return convention:
+ *   return 0 = OK / accept
+ *   return non-zero = reject / propagate error
+ *
+ * The first argument behaves like the client-side callback: it is a verify
+ * code where 0 means verification passed.  Normalize it to the OpenSSL-style
+ * boolean expected by LWS_CALLBACK_OPENSSL_PERFORM_CLIENT_CERT_VERIFICATION.
+ */
 static int
-OpenHiTLS_verify_callback(int32_t is_preverify_ok,
-			       HITLS_CERT_StoreCtx *store_ctx)
+OpenHiTLS_verify_callback(int32_t verify_code, HITLS_CERT_StoreCtx *store_ctx)
 {
 	void *userdata = NULL;
 	struct lws *wsi;
@@ -64,6 +72,7 @@ OpenHiTLS_verify_callback(int32_t is_preverify_ok,
 	const struct lws_protocols *lp;
 	HITLS_X509_Cert *topcert = NULL;
 	union lws_tls_cert_info_results ir;
+	int internal_allow = !verify_code;
 	int n;
 
 	HITLS_X509_StoreCtxCtrl((HITLS_X509_StoreCtx *)store_ctx,
@@ -75,7 +84,7 @@ OpenHiTLS_verify_callback(int32_t is_preverify_ok,
 	wsi = ssl ? (struct lws *)HITLS_GetUserData((HITLS_Ctx *)ssl) : NULL;
 	ssl = wsi ? wsi->tls.ssl : NULL;
 
-	if (!wsi || !wsi->a.vhost || !wsi->a.vhost->protocols) {
+	if (!wsi) {
 		return 1;
 	}
 
@@ -93,7 +102,7 @@ OpenHiTLS_verify_callback(int32_t is_preverify_ok,
 	lp = &wsi->a.vhost->protocols[0];
 	n = lp->callback(wsi,
 			 LWS_CALLBACK_OPENSSL_PERFORM_CLIENT_CERT_VERIFICATION,
-			 store_ctx, ssl, (unsigned int)is_preverify_ok);
+			 store_ctx, ssl, (unsigned int)internal_allow);
 
 	return n;
 }
@@ -108,9 +117,6 @@ lws_tls_server_client_cert_verify_config(struct lws_vhost *vh)
 	}
 
 	ctx = (lws_tls_ctx *)vh->tls.ssl_ctx;
-	if (!ctx) {
-		return -1;
-	}
 
 	if (!lws_check_opt(vh->options,
 			   LWS_SERVER_OPTION_REQUIRE_VALID_OPENSSL_CLIENT_CERT)) {
@@ -158,7 +164,7 @@ lws_ssl_server_name_cb(HITLS_Ctx *ssl, int *alert, void *arg)
 
 	(void)alert;
 
-	if (!ssl || !context) {
+	if (!ssl) {
 		return HITLS_ACCEPT_SNI_ERR_NOACK;
 	}
 
@@ -364,14 +370,21 @@ lws_tls_server_vhost_backend_init(const struct lws_context_creation_info *info,
 	HITLS_Config *config;
 	uint16_t suites[64];
 	size_t suites_count = 0;
-	int ret;
 
 	(void)wsi;
 
-	/* Create full TLS config so options_set/clear version mapping can apply */
 	config = HITLS_CFG_NewTLSConfig();
 	if (!config) {
 		lwsl_err("%s: HITLS_CFG_NewTLSConfig failed\n", __func__);
+		return 1;
+	}
+
+	if (lws_openhitls_apply_tls_version_by_ssl_options(
+			config, info->ssl_options_set,
+			info->ssl_options_clear, __func__)) {
+		lwsl_err("%s: unable to apply server TLS version options\n",
+			 __func__);
+		HITLS_CFG_FreeConfig(config);
 		return 1;
 	}
 
@@ -380,29 +393,15 @@ lws_tls_server_vhost_backend_init(const struct lws_context_creation_info *info,
 	vhost->tls.ssl_ctx = ctx;
 
 #if defined(LWS_WITH_TLS) && (!defined(LWS_WITHOUT_CLIENT) || !defined(LWS_WITHOUT_SERVER))
-	if (vhost->context->keylog_file[0]) {
-		ret = HITLS_CFG_SetKeyLogCb(config, lws_openhitls_klog_dump);
-		if (ret != HITLS_SUCCESS) {
-			lwsl_err("%s: HITLS_CFG_SetKeyLogCb failed: 0x%x\n",
-				 __func__, ret);
-			return 1;
-		}
-	}
+	if (vhost->context->keylog_file[0])
+		HITLS_CFG_SetKeyLogCb(config, lws_openhitls_klog_dump);
 #endif
 
-	ret = HITLS_CFG_SetConfigUserData(config, vhost->context);
-	if (ret != HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_CFG_SetConfigUserData failed: 0x%x\n",
-			 __func__, ret);
-		return 1;
-	}
+	HITLS_CFG_SetConfigUserData(config, vhost->context);
 
 	if (lws_check_opt(info->options,
-			  LWS_SERVER_OPTION_OPENSSL_AUTO_DH_PARAMETERS) &&
-	    HITLS_CFG_SetDhAutoSupport(config, true) != HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_CFG_SetDhAutoSupport failed\n", __func__);
-		return 1;
-	}
+			  LWS_SERVER_OPTION_OPENSSL_AUTO_DH_PARAMETERS))
+		HITLS_CFG_SetDhAutoSupport(config, true);
 
 	HITLS_CFG_SetCipherServerPreference(config, true);
 
@@ -424,23 +423,12 @@ lws_tls_server_vhost_backend_init(const struct lws_context_creation_info *info,
 							&suites_count, __func__);
 	}
 
-	if (suites_count &&
-	    HITLS_CFG_SetCipherSuites(config, suites,
-				      (uint32_t)suites_count) != HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_CFG_SetCipherSuites failed\n", __func__);
-		return 1;
-	}
+	if (suites_count)
+		HITLS_CFG_SetCipherSuites(config, suites,
+				      (uint32_t)suites_count);
 
-	if (HITLS_CFG_SetServerNameCb(config, lws_ssl_server_name_cb)
-			!= HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_CFG_SetServerNameCb failed\n", __func__);
-		return 1;
-	}
-
-	if (HITLS_CFG_SetServerNameArg(config, vhost->context) != HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_CFG_SetServerNameArg failed\n", __func__);
-		return 1;
-	}
+	HITLS_CFG_SetServerNameCb(config, lws_ssl_server_name_cb);
+	HITLS_CFG_SetServerNameArg(config, vhost->context);
 
 	if (info->ssl_ca_filepath &&
 	    HITLS_CFG_LoadVerifyFile(config, info->ssl_ca_filepath) !=
@@ -477,10 +465,6 @@ lws_tls_server_new_nonblocking(struct lws *wsi, lws_sockfd_type accept_fd)
 	}
 
 	vhost_ctx = (lws_tls_ctx *)wsi->a.vhost->tls.ssl_ctx;
-	if (!vhost_ctx) {
-		lwsl_err("%s: no config in vhost ctx\n", __func__);
-		return 1;
-	}
 
 	/* Create new SSL connection from vhost's config */
 	ssl = HITLS_New(vhost_ctx);
@@ -489,11 +473,7 @@ lws_tls_server_new_nonblocking(struct lws *wsi, lws_sockfd_type accept_fd)
 		return 1;
 	}
 
-	if (HITLS_SetUserData(ssl, wsi) != HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_SetUserData failed\n", __func__);
-		HITLS_Free(ssl);
-		return 1;
-	}
+	HITLS_SetUserData(ssl, wsi);
 
 	/* Create and attach BSL_UIO for I/O (TCP socket) */
 	uio = BSL_UIO_New(BSL_UIO_TcpMethod());
@@ -508,28 +488,15 @@ lws_tls_server_new_nonblocking(struct lws *wsi, lws_sockfd_type accept_fd)
 	/* Set non-blocking mode */
 	BSL_UIO_Ctrl(uio, BSL_UIO_SET_NOBLOCK, 1, NULL);
 
-	if (HITLS_SetUio(ssl, uio) != HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_SetUio failed\n", __func__);
-		BSL_UIO_Free(uio);
-		HITLS_Free(ssl);
-		return 1;
-	}
+	HITLS_SetUio(ssl, uio);
 
-	if (HITLS_SetModeSupport(ssl,
-				 HITLS_MODE_ACCEPT_MOVING_WRITE_BUFFER |
-				 HITLS_MODE_RELEASE_BUFFERS) != HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_SetModeSupport failed\n", __func__);
-		HITLS_Free(ssl);
-		return 1;
-	}
+	HITLS_SetModeSupport(ssl,
+			     HITLS_MODE_ACCEPT_MOVING_WRITE_BUFFER |
+			     HITLS_MODE_RELEASE_BUFFERS);
 
 	wsi->tls.ssl = ssl;
-	if (wsi->a.vhost->tls.ssl_info_event_mask &&
-	    HITLS_SetInfoCb(ssl, lws_ssl_info_callback) != HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_SetInfoCb failed\n", __func__);
-		HITLS_Free(ssl);
-		return 1;
-	}
+	if (wsi->a.vhost->tls.ssl_info_event_mask)
+		HITLS_SetInfoCb(ssl, lws_ssl_info_callback);
 	return 0;
 }
 
@@ -537,10 +504,6 @@ enum lws_ssl_capable_status
 lws_tls_server_abort_connection(struct lws *wsi)
 {
 	BSL_UIO *uio = NULL;
-
-	if (!wsi->tls.ssl) {
-		return LWS_SSL_CAPABLE_DONE;
-	}
 
 	/*
 	 * HITLS_Close() (called from __lws_tls_shutdown) has been observed to
@@ -562,10 +525,6 @@ lws_tls_server_accept(struct lws *wsi)
 	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
 	union lws_tls_cert_info_results ir;
 	int ret;
-
-	if (!wsi->tls.ssl) {
-		return LWS_SSL_CAPABLE_ERROR;
-	}
 
 	ret = HITLS_Accept(wsi->tls.ssl);
 
