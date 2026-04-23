@@ -27,6 +27,9 @@
 #include <hitls_pki_utils.h>
 #include <crypt_eal_codecs.h>
 
+extern int32_t
+HITLS_X509_GetDistinguishNameStrFromList(BslList *list, BSL_Buffer *buff);
+
 static time_t
 lws_tls_openhitls_bsltime_to_unix(BSL_TIME *bsl_time)
 {
@@ -44,6 +47,65 @@ lws_tls_openhitls_bsltime_to_unix(BSL_TIME *bsl_time)
 #else
 	return (time_t)-1;
 #endif
+}
+
+static int
+lws_openhitls_append_aki_issuer(union lws_tls_cert_info_results *buf,
+				size_t len, const uint8_t *data,
+				size_t data_len)
+{
+	size_t used = (size_t)buf->ns.len;
+
+	buf->ns.len = (int)(used + data_len);
+	if (buf->ns.len < 0 || len <= used || data_len >= len - used)
+		return -1;
+
+	memcpy(buf->ns.name + used, data, data_len);
+	buf->ns.name[used + data_len] = '\0';
+
+	return 0;
+}
+
+static int
+lws_openhitls_aki_issuer_name(union lws_tls_cert_info_results *buf,
+			      size_t len, HITLS_X509_ExtAki *aki)
+{
+	HITLS_X509_GeneralName *gn;
+	int ret = 1;
+
+	if (!aki->issuerName || !BSL_LIST_COUNT(aki->issuerName))
+		return 1;
+
+	buf->ns.len = 0;
+	gn = BSL_LIST_GET_FIRST(aki->issuerName);
+	while (gn) {
+		if (gn->type == HITLS_X509_GN_DNNAME) {
+			BSL_Buffer dn = { 0 };
+
+			/* Return the AKI issuer as a NUL-terminated certinfo
+			 * string; too-small buffers fail before truncating.
+			 */
+			if (HITLS_X509_GetDistinguishNameStrFromList(
+				    (BslList *)(uintptr_t)gn->value.data,
+				    &dn) != HITLS_PKI_SUCCESS)
+				return -1;
+			ret = lws_openhitls_append_aki_issuer(buf, len,
+							     dn.data,
+							     dn.dataLen);
+			BSL_SAL_Free(dn.data);
+		} else {
+			ret = lws_openhitls_append_aki_issuer(buf, len,
+							     gn->value.data,
+							     gn->value.dataLen);
+		}
+
+		if (ret)
+			return ret;
+
+		gn = BSL_LIST_GET_NEXT(aki->issuerName);
+	}
+
+	return buf->ns.len ? 0 : 1;
 }
 
 int
@@ -220,9 +282,15 @@ lws_tls_openhitls_cert_info(HITLS_X509_Cert *x509, enum lws_tls_cert_info type,
 		HITLS_X509_ClearAuthorityKeyId(&aki);
 		return 0;
 
-	/* openhitls does not support getting aki.issuer info */
 	case LWS_TLS_CERT_INFO_AUTHORITY_KEY_ID_ISSUER:
-		break;
+		ret = HITLS_X509_CertCtrl(x509, HITLS_X509_EXT_GET_AKI, &aki, sizeof(HITLS_X509_ExtAki));
+		if (ret != HITLS_PKI_SUCCESS) {
+			lwsl_err("%s: HITLS_X509_EXT_GET_AKI failed, ret=0x%x\n", __func__, ret);
+			return -1;
+		}
+		ret = lws_openhitls_aki_issuer_name(buf, len, &aki);
+		HITLS_X509_ClearAuthorityKeyId(&aki);
+		return ret;
 
 	case LWS_TLS_CERT_INFO_AUTHORITY_KEY_ID_SERIAL:
 		ret = HITLS_X509_CertCtrl(x509, HITLS_X509_EXT_GET_AKI, &aki, sizeof(HITLS_X509_ExtAki));

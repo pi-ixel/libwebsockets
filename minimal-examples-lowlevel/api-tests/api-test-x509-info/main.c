@@ -76,6 +76,53 @@ test_cert_info(struct lws_x509_cert *x509, enum lws_tls_cert_info type, const ch
 	}
 }
 
+static int
+expect_cert_info_string(struct lws_x509_cert *x509,
+			enum lws_tls_cert_info type, const char *name,
+			const char *needle)
+{
+	char big[4096];
+	union lws_tls_cert_info_results *buf =
+		(union lws_tls_cert_info_results *)big;
+	size_t len = sizeof(big) - sizeof(*buf) + sizeof(buf->ns.name);
+	int ret;
+
+	memset(big, 0, sizeof(big));
+	ret = lws_x509_info(x509, type, buf, len);
+	if (ret) {
+		lwsl_err("%s: %s returned %d", __func__, name, ret);
+		return 1;
+	}
+
+	if (!buf->ns.len || !strstr(buf->ns.name, needle)) {
+		lwsl_err("%s: %s missing '%s' in '%s'", __func__, name,
+			 needle, buf->ns.name);
+		return 1;
+	}
+
+	return 0;
+}
+
+static int
+expect_cert_info_small_buffer(struct lws_x509_cert *x509,
+			      enum lws_tls_cert_info type, const char *name)
+{
+	char small[sizeof(union lws_tls_cert_info_results) + 2];
+	union lws_tls_cert_info_results *buf =
+		(union lws_tls_cert_info_results *)small;
+	int ret;
+
+	memset(small, 0, sizeof(small));
+	ret = lws_x509_info(x509, type, buf, 2);
+	if (ret != -1) {
+		lwsl_err("%s: %s small buffer returned %d", __func__, name,
+			 ret);
+		return 1;
+	}
+
+	return 0;
+}
+
 int main(int argc, const char **argv)
 {
 	struct lws_context_creation_info info;
@@ -87,7 +134,7 @@ int main(int argc, const char **argv)
 	const char *p;
 	FILE *fp;
 	size_t len;
-	int ret;
+	int ret, fail = 0;
 	int logs = LLL_USER | LLL_ERR | LLL_WARN | LLL_NOTICE;
 
 	if ((p = lws_cmdline_option(argc, argv, "-d"))) {
@@ -144,9 +191,17 @@ int main(int argc, const char **argv)
 	test_cert_info(x509, LWS_TLS_CERT_INFO_AUTHORITY_KEY_ID_ISSUER, "AUTHORITY_KEY_ID_ISSUER");
 	test_cert_info(x509, LWS_TLS_CERT_INFO_AUTHORITY_KEY_ID_SERIAL, "AUTHORITY_KEY_ID_SERIAL");
 	test_cert_info(x509, LWS_TLS_CERT_INFO_SUBJECT_KEY_ID, "SUBJECT_KEY_ID");
+#if defined(LWS_WITH_OPENHITLS)
+	fail |= expect_cert_info_string(x509,
+			LWS_TLS_CERT_INFO_AUTHORITY_KEY_ID_ISSUER,
+			"AUTHORITY_KEY_ID_ISSUER", "Test CA");
+	fail |= expect_cert_info_small_buffer(x509,
+			LWS_TLS_CERT_INFO_AUTHORITY_KEY_ID_ISSUER,
+			"AUTHORITY_KEY_ID_ISSUER");
+#endif
 	lws_x509_destroy(&x509);
 	lwsl_user("\n---");
-	lwsl_user("Completed: PASS");
+	lwsl_user("Completed: %s", fail ? "FAIL" : "PASS");
 	lws_context_destroy(context);
-	return 0;
+	return fail;
 }

@@ -105,8 +105,8 @@ callback_http(struct lws *wsi, enum lws_callback_reasons reason,
 		}
 		if (!lws_tls_peer_cert_info(wsi, LWS_TLS_CERT_INFO_AUTHORITY_KEY_ID_ISSUER,
 					    ci, 0)) {
-			lwsl_notice(" AUTHORITY_KEY_ID ISSUER\n");
-			lwsl_hexdump_notice(ci->ns.name, (size_t)ci->ns.len);
+			lwsl_notice(" AUTHORITY_KEY_ID ISSUER: %s\n",
+				    ci->ns.name);
 		}
 		if (!lws_tls_peer_cert_info(wsi, LWS_TLS_CERT_INFO_AUTHORITY_KEY_ID_SERIAL,
 					    ci, 0)) {

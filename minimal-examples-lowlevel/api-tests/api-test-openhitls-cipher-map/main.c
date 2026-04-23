@@ -1,7 +1,7 @@
 /*
  * lws-api-test-openhitls-cipher-map
  *
- * unit tests for OpenHiTLS OpenSSL cipher alias lookup
+ * unit tests for OpenHiTLS direct IANA cipher-suite configuration
  */
 
 #include <libwebsockets.h>
@@ -11,44 +11,50 @@
 #include "private.h"
 
 static int
-expect_success(const char *in, const char *expected)
+expect_apply_success(const char *in)
 {
-	char buf[192];
+	HITLS_Config *config = HITLS_CFG_NewTLSConfig();
+	int ret;
 
-	if (lws_openhitls_cipher_to_stdname(in, buf, sizeof(buf))) {
-		lwsl_err("%s: conversion failed for '%s'\n", __func__, in);
-
-		return 1;
-	}
-
-	if (strcmp(buf, expected)) {
-		lwsl_err("%s: '%s' -> '%s', expected '%s'\n",
-			 __func__, in, buf, expected);
+	if (!config) {
+		lwsl_err("%s: HITLS_CFG_NewTLSConfig failed\n", __func__);
 
 		return 1;
 	}
 
-	return 0;
+	ret = lws_openhitls_apply_cipher_suites(config, in, __func__);
+	HITLS_CFG_FreeConfig(config);
+	if (ret)
+		lwsl_err("%s: apply failed for '%s'\n", __func__, in);
+
+	return ret != 0;
 }
 
 static int
-expect_fail(const char *in)
+expect_apply_fail(const char *in)
 {
-	char buf[192];
+	HITLS_Config *config = HITLS_CFG_NewTLSConfig();
+	int ret;
 
-	if (!lws_openhitls_cipher_to_stdname(in, buf, sizeof(buf))) {
-		lwsl_err("%s: expected failure for '%s', got '%s'\n",
-			 __func__, in, buf);
+	if (!config) {
+		lwsl_err("%s: HITLS_CFG_NewTLSConfig failed\n", __func__);
 
 		return 1;
 	}
 
-	return 0;
+	ret = lws_openhitls_apply_cipher_suites(config, in, __func__);
+	HITLS_CFG_FreeConfig(config);
+	if (!ret)
+		lwsl_err("%s: expected failure for '%s'\n", __func__, in);
+
+	return ret == 0;
 }
 
 int
 main(int argc, const char **argv)
 {
+	struct lws_context_creation_info info;
+	struct lws_context *context;
 	const char *p;
 	int logs = LLL_USER | LLL_ERR | LLL_WARN | LLL_NOTICE;
 	int e = 0;
@@ -57,18 +63,32 @@ main(int argc, const char **argv)
 		logs = atoi(p);
 
 	lws_set_log_level(logs, NULL);
-	lwsl_user("LWS API selftest: OpenHiTLS cipher alias lookup\n");
+	lwsl_user("LWS API selftest: OpenHiTLS IANA cipher config\n");
 
-	e |= expect_success("DHE-PSK-AES128-CCM8",
-			    "TLS_PSK_DHE_WITH_AES_128_CCM_8");
-	e |= expect_fail("ECDHE-RSA-FAKE-CIPHER");
-	e |= expect_success("TLS_AES_128_GCM_SHA256",
-			    "TLS_AES_128_GCM_SHA256");
+	memset(&info, 0, sizeof(info));
+#if defined(LWS_WITH_NETWORK)
+	info.port = CONTEXT_PORT_NO_LISTEN;
+#endif
+	info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
+	context = lws_create_context(&info);
+	if (!context) {
+		lwsl_err("lws init failed\n");
+		return 1;
+	}
+
+	e |= expect_apply_success("TLS_AES_128_GCM_SHA256");
+	e |= expect_apply_success("TLS_AES_128_GCM_SHA256,"
+				  "TLS_AES_256_GCM_SHA384");
+	e |= expect_apply_fail("AES128-SHA");
+	e |= expect_apply_fail("ECDHE-RSA-FAKE-CIPHER");
+	e |= expect_apply_fail("TLS_AES_128_GCM_SHA256:ECDHE-RSA-FAKE-CIPHER");
 
 	if (e)
 		lwsl_err("%s: failed\n", __func__);
 	else
 		lwsl_user("%s: pass\n", __func__);
+
+	lws_context_destroy(context);
 
 	return e;
 }

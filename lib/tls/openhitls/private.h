@@ -27,8 +27,6 @@
 
 #include <stdio.h>
 
-#include "cipher-mapping.h"
-
 #include <hitls.h>
 #include <hitls_config.h>
 #include <hitls_alpn.h>
@@ -123,64 +121,34 @@ lws_openhitls_trim_ws(char **start, char **end)
 }
 
 static LWS_INLINE int
-lws_openhitls_cipher_to_stdname(const char *in, char *out, size_t out_len)
-{
-	size_t i;
-	int n;
-
-	if (!in || !*in || !out || !out_len)
-		return -1;
-
-	if (strpbrk(in, "!+@[]")) /* OpenSSL expression operators unsupported */
-		return -1;
-
-	if (!strncmp(in, "TLS_", 4)) {
-		n = lws_snprintf(out, out_len, "%s", in);
-		if (n <= 0 || (size_t)n >= out_len)
-			return -1;
-
-		return 0;
-	}
-
-	for (i = 0; i < LWS_ARRAY_SIZE(lws_openhitls_cipher_map); i++)
-		if (!strcmp(in, lws_openhitls_cipher_map[i].openssl_name)) {
-			n = lws_snprintf(out, out_len, "%s",
-					 lws_openhitls_cipher_map[i].iana_name);
-			if (n <= 0 || (size_t)n >= out_len)
-				return -1;
-
-			return 0;
-		}
-
-	return -1;
-}
-
-static LWS_INLINE int
-lws_openhitls_collect_cipher_list(const char *list, uint16_t *suites,
-				  size_t max_suites, size_t *count,
+lws_openhitls_apply_cipher_suites(HITLS_Config *config, const char *list,
 				  const char *who)
 {
 	const HITLS_Cipher *c;
-	char token[192], std[192];
+	uint16_t suites[64];
 	const char *p, *d;
-	size_t before;
+	size_t count = 0;
+	char token[192];
 	uint16_t id;
-	int n;
+	int bad = 0;
 
-	if (!list || !*list || !suites || !count || !max_suites)
+	if (!config || !list || !*list)
 		return 0;
 
-	before = *count;
 	p = list;
 	while (*p) {
 		const char *d2;
+		const char *d3;
 		char *ts, *te;
 		size_t tl;
 
 		d = strchr(p, ':');
 		d2 = strchr(p, ',');
+		d3 = strchr(p, ' ');
 		if (!d || (d2 && d2 < d))
 			d = d2;
+		if (!d || (d3 && d3 < d))
+			d = d3;
 		if (!d)
 			d = p + strlen(p);
 		tl = (size_t)(d - p);
@@ -195,40 +163,49 @@ lws_openhitls_collect_cipher_list(const char *list, uint16_t *suites,
 		*te = '\0';
 
 		if (*ts) {
-			if (lws_openhitls_cipher_to_stdname(ts, std, sizeof(std))) {
-				lwsl_warn("%s: unsupported cipher token '%s'\n",
+			c = HITLS_CFG_GetCipherSuiteByStdName((const uint8_t *)ts);
+			if (!c) {
+				lwsl_warn("%s: unknown IANA cipher '%s'\n",
 					  who, ts);
-			} else {
-				c = HITLS_CFG_GetCipherSuiteByStdName((const uint8_t *)std);
-				if (!c) {
-					lwsl_warn("%s: unknown cipher '%s' (std '%s')\n",
-						  who, ts, std);
-				} else if (HITLS_CFG_GetCipherSuite(c, &id) != HITLS_SUCCESS) {
-					lwsl_warn("%s: unable to get cipher id for '%s'\n",
-						  who, std);
-				} else if (*count < max_suites) {
-					size_t i;
-					int dup = 0;
+				bad = 1;
+			} else if (HITLS_CFG_GetCipherSuite(c, &id) !=
+				   HITLS_SUCCESS) {
+				lwsl_warn("%s: unable to get cipher id for '%s'\n",
+					  who, ts);
+				bad = 1;
+			} else if (count < LWS_ARRAY_SIZE(suites)) {
+				size_t i;
+				int dup = 0;
 
-					for (i = 0; i < *count; i++)
-						if (suites[i] == id) {
-							dup = 1;
-							break;
-						}
-					if (!dup)
-						suites[(*count)++] = id;
+				for (i = 0; i < count; i++)
+					if (suites[i] == id) {
+						dup = 1;
+						break;
+					}
+				if (!dup) {
+					suites[count++] = id;
 				}
+			} else {
+				lwsl_warn("%s: too many IANA ciphers in '%s'\n",
+					  who, list);
+				bad = 1;
 			}
 		}
 
 		p = *d ? d + 1 : d;
 	}
 
-	if (*count == before)
+	if (!count || bad)
 		return -1;
 
-	n = (int)(*count - before);
-	return n;
+	/* OpenHiTLS backend now consumes only RFC/IANA suite names from
+	 * tls_ciphers_iana / client_tls_ciphers_iana; OpenSSL cipher
+	 * expression and alias conversion is intentionally not provided.
+	 */
+	return HITLS_CFG_SetCipherSuites(config, suites, (uint32_t)count) ==
+		       HITLS_SUCCESS
+		       ? 0
+		       : -1;
 }
 
 #endif

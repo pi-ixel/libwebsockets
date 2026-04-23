@@ -71,7 +71,6 @@ lws_openhitls_verify_result_to_policy(int vr, HITLS_X509_Cert *peer_cert,
 static int lws_openhitls_client_ctx_fingerprint(
     struct lws_vhost *vh,
     const struct lws_context_creation_info *info,
-    const char *cipher_list,
     const char *ca_filepath,
     const void *ca_mem,
     unsigned int ca_mem_len,
@@ -88,15 +87,9 @@ static int lws_openhitls_client_ctx_fingerprint(
 			return -1;
 	}
 
-	if (cipher_list &&
-	    lws_genhash_update(&hash_ctx, cipher_list, strlen(cipher_list))) {
-		goto bail_hash;
-	}
-
-	if (info->client_tls_1_3_plus_cipher_list &&
-	    info->client_tls_1_3_plus_cipher_list[0] &&
-	    lws_genhash_update(&hash_ctx, info->client_tls_1_3_plus_cipher_list,
-			       strlen(info->client_tls_1_3_plus_cipher_list))) {
+	if (info->client_tls_ciphers_iana &&
+	    lws_genhash_update(&hash_ctx, info->client_tls_ciphers_iana,
+			       strlen(info->client_tls_ciphers_iana))) {
 		goto bail_hash;
 	}
 
@@ -766,15 +759,15 @@ int lws_tls_client_create_vhost_context(
 	lws_tls_ctx *ctx;
 	uint8_t hash[32];
 	HITLS_Config *config;
-	uint16_t suites[64];
-	size_t suites_count = 0;
 	lws_filepos_t flen;
 	uint8_t *der_buf;
 	int cert_set = 0;
 	int ret;
 
+	(void)cipher_list;
+
 	if (lws_openhitls_client_ctx_fingerprint(
-		vh, info, cipher_list, ca_filepath, ca_mem, ca_mem_len,
+		vh, info, ca_filepath, ca_mem, ca_mem_len,
 		cert_filepath, cert_mem, cert_mem_len, private_key_filepath,
 		hash)) {
 		return -1;
@@ -855,36 +848,18 @@ int lws_tls_client_create_vhost_context(
 
 	HITLS_CFG_SetCipherServerPreference(config, true);
 
-	if (cipher_list && cipher_list[0]) {
-		ret = lws_openhitls_collect_cipher_list(
-		    cipher_list, suites, LWS_ARRAY_SIZE(suites), &suites_count,
-		    __func__);
-		if (ret < 0) {
-			lwsl_err("%s: no valid cipher mapped from '%s'\n",
-				 __func__, cipher_list);
+	if (info->client_tls_ciphers_iana &&
+	    info->client_tls_ciphers_iana[0]) {
+		ret = lws_openhitls_apply_cipher_suites(
+			config, info->client_tls_ciphers_iana, __func__);
+		if (ret) {
+			lwsl_err("%s: no valid IANA cipher from '%s'\n",
+				 __func__, info->client_tls_ciphers_iana);
 			goto bail_cfg;
 		}
-	}
-
-	if (info->client_tls_1_3_plus_cipher_list &&
-	    info->client_tls_1_3_plus_cipher_list[0]) {
-		ret = lws_openhitls_collect_cipher_list(
-		    info->client_tls_1_3_plus_cipher_list, suites,
-		    LWS_ARRAY_SIZE(suites), &suites_count, __func__);
-		if (ret < 0) {
-			lwsl_err("%s: no valid cipher mapped from "
-				 "client_tls_1_3_plus_cipher_list '%s'\n",
-				 __func__,
-				 info->client_tls_1_3_plus_cipher_list);
-			goto bail_cfg;
-		}
-	}
-
-	if (suites_count &&
-	    HITLS_CFG_SetCipherSuites(config, suites, (uint32_t)suites_count) !=
-		HITLS_SUCCESS) {
-		lwsl_err("%s: HITLS_CFG_SetCipherSuites failed\n", __func__);
-		goto bail_cfg;
+	} else if (cipher_list || info->client_tls_1_3_plus_cipher_list) {
+		lwsl_info("%s: OpenHiTLS ignores OpenSSL cipher-list fields; "
+			  "use client_tls_ciphers_iana\n", __func__);
 	}
 
 #ifdef LWS_SSL_CLIENT_USE_OS_CA_CERTS

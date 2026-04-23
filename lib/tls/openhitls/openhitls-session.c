@@ -380,12 +380,33 @@ lws_tls_session_dump_save(struct lws_vhost *vh, const char *host, uint16_t port,
 	if (!ts)
 		goto bail;
 
-	/* We have a ref on the session, exit via bail to clean it... */
+	d.blob_len = HITLS_SESS_GetTotalEncodeSize(ts->session);
+	if (!d.blob_len || d.blob_len > UINT32_MAX)
+		goto bail;
 
-	(void)d;
-	(void)cb_save;
-	(void)opq;
-	lwsl_notice("%s: session serialization not supported\n", __func__);
+	d.blob = lws_malloc(d.blob_len, __func__);
+	if (d.blob) {
+		uint32_t used_len = 0;
+
+		/*
+		 * OpenHiTLS serializes its own native session format here.
+		 * These blobs are intentionally backend-private and are not
+		 * compatible with OpenSSL SSL_SESSION DER.
+		 */
+		if (HITLS_SESS_Encode(ts->session, d.blob,
+				      (uint32_t)d.blob_len,
+				      &used_len) == HITLS_SUCCESS &&
+		    used_len && used_len <= d.blob_len) {
+			d.opaque = opq;
+			d.blob_len = used_len;
+			if (cb_save(vh->context, &d))
+				lwsl_notice("%s: save failed\n", __func__);
+			else
+				ret = 0;
+		}
+
+		lws_free(d.blob);
+	}
 
 bail:
 	lws_vhost_unlock(vh); /* } vh --------------  */
@@ -400,11 +421,14 @@ lws_tls_session_dump_load(struct lws_vhost *vh, const char *host, uint16_t port,
 {
 	struct lws_tls_session_dump d;
 	lws_tls_sco_t *ts;
+	HITLS_Session *sess = NULL;
 	void *v;
+	int ret = 1;
 
 	if (vh->options & LWS_SERVER_OPTION_DISABLE_TLS_SESSION_CACHE)
 		return 1;
 
+	memset(&d, 0, sizeof(d));
 	d.opaque = opq;
 	lws_tls_session_tag_discrete(vh->name, host, port, d.tag, sizeof(d.tag));
 
@@ -432,12 +456,41 @@ lws_tls_session_dump_load(struct lws_vhost *vh, const char *host, uint16_t port,
 	/* the callback has allocated the blob and set d.blob / d.blob_len */
 
 	v = d.blob;
+	if (!v || !d.blob_len) {
+		lwsl_warn("%s: no session blob\n", __func__);
+		goto bail;
+	}
+
+	sess = HITLS_SESS_New();
+	if (!sess)
+		goto bail;
+
+	/* See save path: the cold-storage blob is OpenHiTLS-native only. */
+	if (d.blob_len > UINT32_MAX ||
+	    HITLS_SESS_Decode(sess, d.blob, (uint32_t)d.blob_len) !=
+								HITLS_SUCCESS) {
+		lwsl_warn("%s: HITLS_SESS_Decode failed\n", __func__);
+		goto bail;
+	}
+
+	ts = lws_tls_session_add_entry(vh, d.tag);
+	if (!ts) {
+		lwsl_warn("%s: unable to add cache entry\n", __func__);
+		goto bail;
+	}
+
+	ts->session = sess;
+	sess = NULL;
+	ret = 0;
+	lwsl_tlssess("%s: session loaded OK\n", __func__);
+
+bail:
+	HITLS_SESS_Free(sess);
 	free(v); /* user code will have used malloc() */
-	lwsl_warn("%s: session deserialization not supported\n", __func__);
 bail1:
 
 	lws_vhost_unlock(vh); /* } vh --------------  */
 	lws_context_unlock(vh->context); /* } cx --------------  */
 
-	return 1;
+	return ret;
 }

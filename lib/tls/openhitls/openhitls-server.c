@@ -32,8 +32,10 @@
 #include <hitls_pki_csr.h>
 #include <hitls_pki_utils.h>
 #include <crypt_eal_codecs.h>
+#include <crypt_eal_rand.h>
 #include <crypt_params_key.h>
 #include <bsl_sal.h>
+#include <time.h>
 
 static void
 lws_openhitls_log_error_string(const char *prefix, const char *subject,
@@ -368,8 +370,7 @@ lws_tls_server_vhost_backend_init(const struct lws_context_creation_info *info,
 {
 	lws_tls_ctx *ctx;
 	HITLS_Config *config;
-	uint16_t suites[64];
-	size_t suites_count = 0;
+	int ret;
 
 	(void)wsi;
 
@@ -409,23 +410,18 @@ lws_tls_server_vhost_backend_init(const struct lws_context_creation_info *info,
 				       HITLS_MODE_ACCEPT_MOVING_WRITE_BUFFER |
 				       HITLS_MODE_RELEASE_BUFFERS);
 
-	if (info->tls1_3_plus_cipher_list && info->tls1_3_plus_cipher_list[0]) {
-		lws_openhitls_collect_cipher_list(info->tls1_3_plus_cipher_list,
-							suites,
-							LWS_ARRAY_SIZE(suites),
-							&suites_count, __func__);
+	if (info->tls_ciphers_iana && info->tls_ciphers_iana[0]) {
+		ret = lws_openhitls_apply_cipher_suites(
+			config, info->tls_ciphers_iana, __func__);
+		if (ret) {
+			lwsl_err("%s: no valid IANA cipher from '%s'\n",
+				 __func__, info->tls_ciphers_iana);
+			return 1;
+		}
+	} else if (info->ssl_cipher_list || info->tls1_3_plus_cipher_list) {
+		lwsl_info("%s: OpenHiTLS ignores OpenSSL cipher-list fields; "
+			  "use tls_ciphers_iana\n", __func__);
 	}
-
-	if (info->ssl_cipher_list && info->ssl_cipher_list[0]) {
-		lws_openhitls_collect_cipher_list(info->ssl_cipher_list,
-							suites,
-							LWS_ARRAY_SIZE(suites),
-							&suites_count, __func__);
-	}
-
-	if (suites_count)
-		HITLS_CFG_SetCipherSuites(config, suites,
-				      (uint32_t)suites_count);
 
 	HITLS_CFG_SetServerNameCb(config, lws_ssl_server_name_cb);
 	HITLS_CFG_SetServerNameArg(config, vhost->context);
@@ -582,21 +578,372 @@ lws_tls_server_accept(struct lws *wsi)
 	return LWS_SSL_CAPABLE_ERROR;
 }
 
+#if defined(LWS_WITH_ACME)
+
+struct lws_tls_ss_pieces {
+	HITLS_X509_Cert *cert;
+	CRYPT_EAL_PkeyCtx *pkey;
+};
+
+static int
+lws_openhitls_rand_init(void)
+{
+	int32_t ret;
+
+	ret = CRYPT_EAL_RandInit(CRYPT_RAND_SHA256, NULL, NULL, NULL, 0);
+	if (ret == CRYPT_SUCCESS || ret == CRYPT_EAL_ERR_DRBG_REPEAT_INIT)
+		return 0;
+
+	lwsl_notice("%s: CRYPT_EAL_RandInit failed: 0x%x\n", __func__, ret);
+
+	return 1;
+}
+
+static CRYPT_EAL_PkeyCtx *
+lws_openhitls_rsa_new_key(void)
+{
+	uint8_t e[] = { 1, 0, 1 };
+	CRYPT_EAL_PkeyPara para;
+	CRYPT_EAL_PkeyCtx *pkey;
+	int bits = lws_plat_recommended_rsa_bits();
+
+	if (lws_openhitls_rand_init())
+		return NULL;
+
+	memset(&para, 0, sizeof(para));
+	para.id = CRYPT_PKEY_RSA;
+	para.para.rsaPara.e = e;
+	para.para.rsaPara.eLen = sizeof(e);
+	para.para.rsaPara.bits = (uint32_t)bits;
+
+	pkey = CRYPT_EAL_PkeyNewCtx(CRYPT_PKEY_RSA);
+	if (!pkey)
+		return NULL;
+
+	if (CRYPT_EAL_PkeySetPara(pkey, &para) == CRYPT_SUCCESS &&
+	    CRYPT_EAL_PkeyGen(pkey) == CRYPT_SUCCESS)
+		return pkey;
+
+	CRYPT_EAL_PkeyFreeCtx(pkey);
+
+	return NULL;
+}
+
+static int
+lws_openhitls_add_dn(BslList *dn, BslCid cid, const char *value)
+{
+	HITLS_X509_DN name;
+
+	if (!value || !value[0])
+		value = "none";
+
+	memset(&name, 0, sizeof(name));
+	name.cid = cid;
+	name.data = (uint8_t *)value;
+	name.dataLen = (uint32_t)strlen(value);
+
+	return HITLS_X509_AddDnName(dn, &name, 1) != HITLS_PKI_SUCCESS;
+}
+
+static BslList *
+lws_openhitls_new_acme_dn(void)
+{
+	BslList *dn;
+
+	dn = HITLS_X509_DnListNew();
+	if (!dn)
+		return NULL;
+
+	if (lws_openhitls_add_dn(dn, BSL_CID_AT_COUNTRYNAME, "GB") ||
+	    lws_openhitls_add_dn(dn, BSL_CID_AT_ORGANIZATIONNAME,
+				 "somecompany") ||
+	    lws_openhitls_add_dn(dn, BSL_CID_AT_COMMONNAME,
+				 "temp.acme.invalid")) {
+		HITLS_X509_DnListFree(dn);
+		return NULL;
+	}
+
+	return dn;
+}
+
+static void
+lws_openhitls_free_san(HITLS_X509_ExtSan *san)
+{
+	if (san->names)
+		BSL_LIST_FREE(san->names,
+			      (BSL_LIST_PFUNC_FREE)HITLS_X509_FreeGeneralName);
+	memset(san, 0, sizeof(*san));
+}
+
+static int
+lws_openhitls_add_san_name(HITLS_X509_ExtSan *san, const char *name)
+{
+	HITLS_X509_GeneralName *gn;
+	uint32_t len;
+
+	if (!name || !name[0])
+		return 0;
+
+	len = (uint32_t)strlen(name);
+	gn = BSL_SAL_Calloc(1, sizeof(*gn));
+	if (!gn)
+		return 1;
+
+	gn->type = HITLS_X509_GN_DNS;
+	gn->value.data = BSL_SAL_Dump(name, len);
+	gn->value.dataLen = len;
+	if (!gn->value.data ||
+	    BSL_LIST_AddElement(san->names, gn, BSL_LIST_POS_END) !=
+								BSL_SUCCESS) {
+		HITLS_X509_FreeGeneralName(gn);
+		return 1;
+	}
+
+	return 0;
+}
+
+static int
+lws_openhitls_prepare_san(HITLS_X509_ExtSan *san, const char *san_a,
+			  const char *san_b)
+{
+	memset(san, 0, sizeof(*san));
+	san->names = BSL_LIST_New(sizeof(HITLS_X509_GeneralName));
+	if (!san->names)
+		return 1;
+
+	if (lws_openhitls_add_san_name(san, san_a) ||
+	    lws_openhitls_add_san_name(san, san_b)) {
+		lws_openhitls_free_san(san);
+		return 1;
+	}
+
+	if (!BSL_LIST_COUNT(san->names)) {
+		lws_openhitls_free_san(san);
+		return 1;
+	}
+
+	return 0;
+}
+
+static int
+lws_openhitls_b64url(const uint8_t *in, size_t in_len, uint8_t *out,
+		     size_t out_len)
+{
+	int n;
+
+	if (!out_len)
+		return -1;
+
+	n = lws_b64_encode_string_url((const char *)in, (int)in_len,
+				      (char *)out, (int)out_len);
+	if (n < 0)
+		return -1;
+
+	while (n && out[n - 1] == '=')
+		n--;
+
+	out[n] = '\0';
+
+	return n;
+}
+
 int
 lws_tls_acme_sni_cert_create(struct lws_vhost *vhost, const char *san_a,
 			     const char *san_b)
 {
-	(void)vhost;
-	(void)san_a;
-	(void)san_b;
+	BSL_Buffer cert_der = { 0 }, key_der = { 0 };
+	HITLS_X509_ExtSan san;
+	HITLS_Config *config;
+	BslList *dn = NULL;
+	BSL_TIME before, after;
+	uint8_t serial[] = { 1 };
+	int32_t ret, version = HITLS_X509_VERSION_3;
+	time_t now;
 
+	if (!vhost || !vhost->tls.ssl_ctx || !san_a || !san_a[0])
+		return 1;
+
+	lws_tls_acme_sni_cert_destroy(vhost);
+
+	vhost->tls.ss = lws_zalloc(sizeof(*vhost->tls.ss), "sni cert");
+	if (!vhost->tls.ss)
+		return 1;
+
+	vhost->tls.ss->pkey = lws_openhitls_rsa_new_key();
+	vhost->tls.ss->cert = HITLS_X509_CertNew();
+	if (!vhost->tls.ss->pkey || !vhost->tls.ss->cert)
+		goto bail;
+
+	dn = lws_openhitls_new_acme_dn();
+	if (!dn)
+		goto bail;
+
+	now = time(NULL);
+	if (now == (time_t)-1 ||
+	    BSL_SAL_UtcTimeToDateConvert((int64_t)now, &before) !=
+								BSL_SUCCESS ||
+	    BSL_SAL_UtcTimeToDateConvert((int64_t)now + 3600, &after) !=
+								BSL_SUCCESS)
+		goto bail;
+
+	ret = HITLS_X509_CertCtrl(vhost->tls.ss->cert, HITLS_X509_SET_VERSION,
+				  &version, sizeof(version));
+	ret |= HITLS_X509_CertCtrl(vhost->tls.ss->cert,
+				   HITLS_X509_SET_SERIALNUM, serial,
+				   sizeof(serial));
+	ret |= HITLS_X509_CertCtrl(vhost->tls.ss->cert,
+				   HITLS_X509_SET_BEFORE_TIME, &before,
+				   sizeof(before));
+	ret |= HITLS_X509_CertCtrl(vhost->tls.ss->cert,
+				   HITLS_X509_SET_AFTER_TIME, &after,
+				   sizeof(after));
+	ret |= HITLS_X509_CertCtrl(vhost->tls.ss->cert, HITLS_X509_SET_PUBKEY,
+				   vhost->tls.ss->pkey, 0);
+	ret |= HITLS_X509_CertCtrl(vhost->tls.ss->cert,
+				   HITLS_X509_SET_SUBJECT_DN, dn,
+				   sizeof(*dn));
+	ret |= HITLS_X509_CertCtrl(vhost->tls.ss->cert,
+				   HITLS_X509_SET_ISSUER_DN, dn,
+				   sizeof(*dn));
+	if (ret)
+		goto bail;
+
+	/*
+	 * OpenHiTLS PKI copies ctrl payloads into the cert; the temporary DN
+	 * and SAN lists remain caller-owned and must be freed after ctrl.
+	 */
+	if (lws_openhitls_prepare_san(&san, san_a, san_b))
+		goto bail;
+	ret = HITLS_X509_CertCtrl(vhost->tls.ss->cert, HITLS_X509_EXT_SET_SAN,
+				  &san, sizeof(san));
+	lws_openhitls_free_san(&san);
+	if (ret != HITLS_PKI_SUCCESS)
+		goto bail;
+
+	if (HITLS_X509_CertSign(CRYPT_MD_SHA256, vhost->tls.ss->pkey, NULL,
+				vhost->tls.ss->cert) != HITLS_PKI_SUCCESS ||
+	    HITLS_X509_CertGenBuff(BSL_FORMAT_ASN1, vhost->tls.ss->cert,
+				   &cert_der) != HITLS_PKI_SUCCESS ||
+	    CRYPT_EAL_EncodeBuffKey(vhost->tls.ss->pkey, NULL,
+				    BSL_FORMAT_ASN1,
+				    CRYPT_PRIKEY_PKCS8_UNENCRYPT,
+				    &key_der) != CRYPT_SUCCESS)
+		goto bail;
+
+	config = (HITLS_Config *)vhost->tls.ssl_ctx;
+	ret = HITLS_CFG_LoadCertBuffer(config, cert_der.data,
+				       cert_der.dataLen,
+				       TLS_PARSE_FORMAT_ASN1);
+	if (ret == HITLS_SUCCESS)
+		ret = HITLS_CFG_LoadKeyBuffer(config, key_der.data,
+					      key_der.dataLen,
+					      TLS_PARSE_FORMAT_ASN1);
+	if (ret == HITLS_SUCCESS)
+		ret = HITLS_CFG_CheckPrivateKey(config);
+
+	BSL_SAL_FREE(cert_der.data);
+	BSL_SAL_FREE(key_der.data);
+	HITLS_X509_DnListFree(dn);
+	if (ret != HITLS_SUCCESS)
+		lws_tls_acme_sni_cert_destroy(vhost);
+
+	return ret != HITLS_SUCCESS;
+
+bail:
+	BSL_SAL_FREE(cert_der.data);
+	BSL_SAL_FREE(key_der.data);
+	if (dn)
+		HITLS_X509_DnListFree(dn);
+	lws_tls_acme_sni_cert_destroy(vhost);
 	return 1;
 }
 
 void
 lws_tls_acme_sni_cert_destroy(struct lws_vhost *vhost)
 {
-	(void)vhost;
+	if (!vhost || !vhost->tls.ss)
+		return;
+
+	HITLS_X509_CertFree(vhost->tls.ss->cert);
+	CRYPT_EAL_PkeyFreeCtx(vhost->tls.ss->pkey);
+	lws_free_set_NULL(vhost->tls.ss);
+}
+
+static int
+lws_openhitls_csr_add_subject(const char *elements[], HITLS_X509_Csr *csr)
+{
+	static const BslCid dn_cid[LWS_TLS_REQ_ELEMENT_COUNT] = {
+		BSL_CID_AT_COUNTRYNAME,
+		BSL_CID_AT_STATEORPROVINCENAME,
+		BSL_CID_AT_LOCALITYNAME,
+		BSL_CID_AT_ORGANIZATIONNAME,
+		BSL_CID_AT_COMMONNAME,
+		BSL_CID_UNKNOWN,
+		BSL_CID_UNKNOWN
+	};
+	HITLS_X509_DN dn;
+	int n;
+
+	memset(&dn, 0, sizeof(dn));
+
+	for (n = 0; n < LWS_TLS_REQ_ELEMENT_COUNT; n++) {
+		if (dn_cid[n] == BSL_CID_UNKNOWN || !elements[n]) {
+			if (n == LWS_TLS_REQ_ELEMENT_EMAIL && elements[n])
+				lwsl_debug("%s: OpenHiTLS PKI omits email DN\n",
+					   __func__);
+			continue;
+		}
+
+		dn.cid = dn_cid[n];
+		dn.data = (uint8_t *)(elements[n][0] ? elements[n] : "none");
+		dn.dataLen = (uint32_t)strlen((const char *)dn.data);
+		if (HITLS_X509_CsrCtrl(csr, HITLS_X509_ADD_SUBJECT_NAME,
+				       &dn, 1) != HITLS_PKI_SUCCESS) {
+			lwsl_notice("%s: failed to add CSR subject element %d\n",
+				    __func__, n);
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+static int
+lws_openhitls_csr_add_san(const char *elements[], HITLS_X509_Csr *csr)
+{
+	HITLS_X509_Attrs *attrs = NULL;
+	HITLS_X509_Ext *ext = NULL;
+	HITLS_X509_ExtSan san;
+	int ret = 1;
+
+	if (!elements[LWS_TLS_REQ_ELEMENT_SUBJECT_ALT_NAME])
+		return 0;
+
+	if (lws_openhitls_prepare_san(&san,
+			elements[LWS_TLS_REQ_ELEMENT_COMMON_NAME],
+			elements[LWS_TLS_REQ_ELEMENT_SUBJECT_ALT_NAME]))
+		return 1;
+
+	ext = HITLS_X509_ExtNew(HITLS_X509_EXT_TYPE_CSR);
+	if (!ext)
+		goto bail;
+
+	if (HITLS_X509_ExtCtrl(ext, HITLS_X509_EXT_SET_SAN, &san,
+			       sizeof(san)) != HITLS_PKI_SUCCESS ||
+	    HITLS_X509_CsrCtrl(csr, HITLS_X509_CSR_GET_ATTRIBUTES, &attrs,
+			       sizeof(attrs)) != HITLS_PKI_SUCCESS ||
+	    HITLS_X509_AttrCtrl(attrs,
+				HITLS_X509_ATTR_SET_REQUESTED_EXTENSIONS,
+				ext, 0) != HITLS_PKI_SUCCESS)
+		goto bail;
+
+	ret = 0;
+
+bail:
+	HITLS_X509_ExtFree(ext);
+	lws_openhitls_free_san(&san);
+
+	return ret;
 }
 
 int
@@ -604,12 +951,87 @@ lws_tls_acme_sni_csr_create(struct lws_context *context, const char *elements[],
 			    uint8_t *csr, size_t csr_len, char **privkey_pem,
 			    size_t *privkey_len)
 {
-	(void)context;
-	(void)elements;
-	(void)csr;
-	(void)csr_len;
-	(void)privkey_pem;
-	(void)privkey_len;
+	BSL_Buffer csr_der = { 0 }, key_pem = { 0 };
+	CRYPT_EAL_PkeyCtx *pkey = NULL;
+	HITLS_X509_Csr *req = NULL;
+	int n, ret = -1;
 
-	return 1;
+	(void)context;
+
+	if (!elements || !csr || !csr_len || !privkey_pem || !privkey_len)
+		return -1;
+
+	*privkey_pem = NULL;
+	*privkey_len = 0;
+
+	pkey = lws_openhitls_rsa_new_key();
+	req = HITLS_X509_CsrNew();
+	if (!pkey || !req) {
+		lwsl_notice("%s: unable to allocate key or CSR\n", __func__);
+		goto bail;
+	}
+
+	if (HITLS_X509_CsrCtrl(req, HITLS_X509_SET_PUBKEY, pkey, 0) !=
+								HITLS_PKI_SUCCESS) {
+		lws_openhitls_log_error_string("unable to set CSR public key",
+					       __func__, HITLS_PKI_SUCCESS);
+		goto bail;
+	}
+	if (lws_openhitls_csr_add_subject(elements, req)) {
+		lws_openhitls_log_error_string("unable to set CSR subject",
+					       __func__, HITLS_PKI_SUCCESS);
+		goto bail;
+	}
+	if (lws_openhitls_csr_add_san(elements, req)) {
+		lws_openhitls_log_error_string("unable to set CSR SAN",
+					       __func__, HITLS_PKI_SUCCESS);
+		goto bail;
+	}
+	if (HITLS_X509_CsrSign(CRYPT_MD_SHA256, pkey, NULL, req) !=
+							HITLS_PKI_SUCCESS) {
+		lws_openhitls_log_error_string("unable to sign CSR", __func__,
+					       HITLS_PKI_SUCCESS);
+		goto bail;
+	}
+	if (HITLS_X509_CsrGenBuff(BSL_FORMAT_ASN1, req, &csr_der) !=
+								HITLS_PKI_SUCCESS) {
+		lws_openhitls_log_error_string("unable to encode CSR", __func__,
+					       HITLS_PKI_SUCCESS);
+		goto bail;
+	}
+
+	n = lws_openhitls_b64url(csr_der.data, csr_der.dataLen, csr, csr_len);
+	if (n < 0)
+		goto bail;
+
+	if (CRYPT_EAL_EncodeBuffKey(pkey, NULL, BSL_FORMAT_PEM,
+				    CRYPT_PRIKEY_PKCS8_UNENCRYPT,
+				    &key_pem) != CRYPT_SUCCESS) {
+		lws_openhitls_log_error_string("unable to encode CSR private key",
+					       __func__, CRYPT_SUCCESS);
+		goto bail;
+	}
+
+	*privkey_pem = malloc(key_pem.dataLen); /* malloc so caller can free */
+	if (!*privkey_pem)
+		goto bail;
+
+	memcpy(*privkey_pem, key_pem.data, key_pem.dataLen);
+	*privkey_len = key_pem.dataLen;
+	ret = n;
+
+bail:
+	if (ret < 0) {
+		free(*privkey_pem);
+		*privkey_pem = NULL;
+		*privkey_len = 0;
+	}
+	BSL_SAL_FREE(csr_der.data);
+	BSL_SAL_FREE(key_pem.data);
+	HITLS_X509_CsrFree(req);
+	CRYPT_EAL_PkeyFreeCtx(pkey);
+
+	return ret;
 }
+
+#endif
