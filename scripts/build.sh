@@ -44,6 +44,7 @@ Notes:
   This script owns configure/build decisions.
   The configure step is always refreshed so changed CMake options take effect.
   Default output directories are build and destdir.
+  The openhitls minimal profile enables DTLS, JOSE, COSE, GENCRYPTO, and TLS_SESSIONS.
   Use scripts/run-tests.sh to install and run tests from an existing build directory.
 
 Environment variables:
@@ -235,6 +236,7 @@ if [ "${profile}" = "minimal" ]; then
     "-DLWS_WITH_HTTP2=1"
     "-DLWS_CTEST_INTERNET_AVAILABLE=0"
     "-DLWS_WITH_GENCRYPTO=1"
+    "-DLWS_WITH_TLS_SESSIONS=1"
     "-DLWS_ROLE_MQTT=1"
     "-DLWS_WITH_EVENT_LIBS=1"
     "-DLWS_WITH_LIBUV=1"
@@ -252,10 +254,13 @@ if [ "${profile}" = "minimal" ]; then
     "-DLWS_WITH_SELFTESTS=1"
     "-DLWS_WITH_TLS_JIT_TRUST=1"
   )
-  if [ "${tls_choice}" != "openhitls" ]; then
+  cmake_args+=(
+    "-DLWS_WITH_JOSE=1"
+    "-DLWS_WITH_COSE=1"
+  )
+  if [ "${tls_choice}" = "openhitls" ]; then
     cmake_args+=(
-      "-DLWS_WITH_JOSE=1"
-      "-DLWS_WITH_COSE=1"
+      "-DLWS_WITH_DTLS=1"
     )
   fi
 fi

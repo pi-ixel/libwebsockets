@@ -668,7 +668,7 @@ enum lws_ssl_capable_status lws_tls_client_connect(struct lws *wsi,
 	}
 
 	if (!ret) /* we don't know what he wants, but he says to retry */
-		return LWS_SSL_CAPABLE_MORE_SERVICE;
+		return LWS_SSL_CAPABLE_MORE_SERVICE_READ;
 
 	lws_snprintf(errbuf, len, "connect unk %d", m);
 

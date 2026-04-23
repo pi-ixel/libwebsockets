@@ -73,15 +73,16 @@ __lws_tls_session_lookup_by_name(struct lws_vhost *vh, const char *name)
 	* If possible, reuse an existing, cached session
 	*/
 
-void
+int
 lws_tls_reuse_session(struct lws *wsi)
 {
 	char tag[LWS_SESSION_TAG_LEN];
 	lws_tls_sco_t *ts;
+	int reused = 0;
 
 	if (!wsi->a.vhost ||
 		wsi->a.vhost->options & LWS_SERVER_OPTION_DISABLE_TLS_SESSION_CACHE)
-		return;
+		return 0;
 
 	lws_context_lock(wsi->a.context, __func__); /* -------------- cx { */
 	lws_vhost_lock(wsi->a.vhost); /* -------------- vh { */
@@ -101,6 +102,7 @@ lws_tls_reuse_session(struct lws *wsi)
 		lwsl_err("%s: session not set for %s\n", __func__, tag);
 		goto bail;
 	}
+	reused = 1;
 
 	/* keep our session list sorted in lru -> mru order */
 
@@ -110,6 +112,7 @@ lws_tls_reuse_session(struct lws *wsi)
 bail:
 	lws_vhost_unlock(wsi->a.vhost); /* } vh --------------  */
 	lws_context_unlock(wsi->a.context); /* } cx --------------  */
+	return reused;
 }
 
 int

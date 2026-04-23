@@ -264,15 +264,15 @@ lws_ssl_capable_read(struct lws *wsi, unsigned char *buf, size_t len)
 		/* retryable */
 		if (m == HITLS_WANT_READ) {
 			lwsl_debug("%s: WANT_READ\n", __func__);
-			lwsl_debug("%s: LWS_SSL_CAPABLE_MORE_SERVICE\n", lws_wsi_tag(wsi));
-			return LWS_SSL_CAPABLE_MORE_SERVICE;
+			lwsl_debug("%s: LWS_SSL_CAPABLE_MORE_SERVICE_READ\n", lws_wsi_tag(wsi));
+			return LWS_SSL_CAPABLE_MORE_SERVICE_READ;
 		}
 		if (m == HITLS_WANT_WRITE) {
 			lwsl_info("%s: WANT_WRITE\n", __func__);
-			lwsl_debug("%s: LWS_SSL_CAPABLE_MORE_SERVICE\n", lws_wsi_tag(wsi));
+			lwsl_debug("%s: LWS_SSL_CAPABLE_MORE_SERVICE_WRITE\n", lws_wsi_tag(wsi));
 			wsi->tls_read_wanted_write = 1;
 			lws_callback_on_writable(wsi);
-			return LWS_SSL_CAPABLE_MORE_SERVICE;
+			return LWS_SSL_CAPABLE_MORE_SERVICE_WRITE;
 		}
 
 		/* keep on trucking it seems */
@@ -359,13 +359,13 @@ lws_ssl_capable_write(struct lws *wsi, unsigned char *buf, size_t len)
 	if (ret != HITLS_ERR_SYSCALL) {
 		if (ret == HITLS_WANT_READ) {
 			lwsl_notice("%s: want read during write\n", __func__);
-			return LWS_SSL_CAPABLE_MORE_SERVICE;
+			return LWS_SSL_CAPABLE_MORE_SERVICE_READ;
 		}
 
 		if (ret == HITLS_WANT_WRITE) {
 			lws_set_blocking_send(wsi);
 			lwsl_debug("%s: want write\n", __func__);
-			return LWS_SSL_CAPABLE_MORE_SERVICE;
+			return LWS_SSL_CAPABLE_MORE_SERVICE_WRITE;
 		}
 	}
 
