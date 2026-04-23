@@ -205,6 +205,10 @@ if (LWS_WITH_SSL)
 				tls/openhitls/lws-genec.c
 				tls/openhitls/lws-gencrypto.c)
 		endif()
+		if (LWS_WITH_NETWORK AND LWS_WITH_DTLS)
+			list(APPEND SOURCES
+				tls/openhitls/lws-gendtls.c)
+		endif()
 	elseif (LWS_WITH_BEARSSL)
 		list(APPEND SOURCES
 			tls/bearssl/bearssl-ssl.c

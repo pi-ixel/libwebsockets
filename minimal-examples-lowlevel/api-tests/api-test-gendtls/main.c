@@ -70,9 +70,10 @@ int read_file_into_mem(const char *path, uint8_t **buf, size_t *len) {
     return 0;
 }
 
-lws_sockfd_type udp_socket(int port) {
+lws_sockfd_type udp_socket(int port, struct sockaddr_in *bound) {
     lws_sockfd_type fd = socket(AF_INET, SOCK_DGRAM, 0);
     struct sockaddr_in sin;
+    socklen_t len = sizeof(sin);
     if (fd == LWS_SOCK_INVALID) return LWS_SOCK_INVALID;
     memset(&sin, 0, sizeof(sin));
     sin.sin_family = AF_INET;
@@ -81,6 +82,13 @@ lws_sockfd_type udp_socket(int port) {
     if (bind(fd, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
         compatible_close(fd);
         return LWS_SOCK_INVALID;
+    }
+    if (bound) {
+        if (getsockname(fd, (struct sockaddr *)&sin, &len) < 0) {
+            compatible_close(fd);
+            return LWS_SOCK_INVALID;
+        }
+        *bound = sin;
     }
     return fd;
 }
@@ -189,15 +197,12 @@ int main(int argc, const char **argv)
     }
 
     if (use_udp) {
-        server_fd = udp_socket(port);
-        client_fd = udp_socket(0);
+        server_fd = udp_socket(port, &srv_addr);
+        client_fd = udp_socket(0, NULL);
         if (server_fd == LWS_SOCK_INVALID || client_fd == LWS_SOCK_INVALID) {
             lwsl_err("Failed to create UDP sockets on port %d\n", port);
             goto bail_server;
         }
-        memset(&srv_addr, 0, sizeof(srv_addr));
-        srv_addr.sin_family = AF_INET;
-        srv_addr.sin_port = htons((uint16_t)port);
         inet_pton(AF_INET, "127.0.0.1", &srv_addr.sin_addr);
     }
 

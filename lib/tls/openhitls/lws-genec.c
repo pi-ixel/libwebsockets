@@ -626,3 +626,281 @@ lws_genecdh_compute_shared_secret(struct lws_genec_ctx *ctx, uint8_t *ss,
 
 	return 0;
 }
+
+/*
+ * OpenHiTLS currently exposes CRYPT_PKEY_ED25519 but not CRYPT_PKEY_ED448 in
+ * the public EAL pkey API.  Keep Ed448 as an explicit unsupported boundary.
+ */
+#define LWS_OPENHITLS_ED25519_KEYLEN		32
+#define LWS_OPENHITLS_ED25519_SIGLEN		64
+
+static int
+lws_openhitls_eddsa_alg_from_curve(const struct lws_gencrypto_keyelem *el,
+				   CRYPT_PKEY_AlgId *alg, uint32_t *key_len,
+				   uint32_t *sig_len)
+{
+	const struct lws_gencrypto_keyelem *crv =
+			&el[LWS_GENCRYPTO_OKP_KEYEL_CRV];
+
+	if ((crv->len == 7 || crv->len == 8) &&
+	    !strncmp((const char *)crv->buf, "Ed25519", 7)) {
+		*alg = CRYPT_PKEY_ED25519;
+		*key_len = LWS_OPENHITLS_ED25519_KEYLEN;
+		*sig_len = LWS_OPENHITLS_ED25519_SIGLEN;
+		return 0;
+	}
+
+	if ((crv->len == 5 || crv->len == 6) &&
+	    !strncmp((const char *)crv->buf, "Ed448", 5))
+		lwsl_notice("%s: OpenHiTLS Ed448 is not supported\n", __func__);
+
+	return -1;
+}
+
+static int
+lws_openhitls_eddsa_curve_name_to_alg(const char *curve_name,
+				      CRYPT_PKEY_AlgId *alg,
+				      uint32_t *key_len, uint32_t *sig_len)
+{
+	if (!strcmp(curve_name, "Ed25519")) {
+		*alg = CRYPT_PKEY_ED25519;
+		*key_len = LWS_OPENHITLS_ED25519_KEYLEN;
+		*sig_len = LWS_OPENHITLS_ED25519_SIGLEN;
+		return 0;
+	}
+
+	if (!strcmp(curve_name, "Ed448"))
+		lwsl_notice("%s: OpenHiTLS Ed448 is not supported\n", __func__);
+
+	return -1;
+}
+
+static int
+lws_openhitls_eddsa_alloc_keyel(uint32_t len,
+				struct lws_gencrypto_keyelem *el,
+				int keyel, const char *reason)
+{
+	el[keyel].buf = lws_malloc(len, reason);
+	if (!el[keyel].buf)
+		return -1;
+	el[keyel].len = len;
+
+	return 0;
+}
+
+int
+lws_geneddsa_create(struct lws_genec_ctx *ctx, struct lws_context *context,
+		    const struct lws_ec_curves *curve_table)
+{
+	ctx->context = context;
+	ctx->ctx[0] = NULL;
+	ctx->ctx[1] = NULL;
+	ctx->curve_table = curve_table;
+	ctx->genec_alg = LEGENEC_EDDSA;
+
+	return 0;
+}
+
+int
+lws_geneddsa_set_key(struct lws_genec_ctx *ctx,
+		     const struct lws_gencrypto_keyelem *el)
+{
+	CRYPT_EAL_PkeyPub pub = {0};
+	CRYPT_EAL_PkeyPrv prv = {0};
+	CRYPT_PKEY_AlgId alg;
+	uint32_t key_len, sig_len;
+	int ret;
+
+	if (ctx->genec_alg != LEGENEC_EDDSA)
+		return -1;
+
+	if (lws_openhitls_eddsa_alg_from_curve(el, &alg, &key_len, &sig_len))
+		return -1;
+
+	(void)sig_len;
+
+	if ((el[LWS_GENCRYPTO_OKP_KEYEL_D].len &&
+	     el[LWS_GENCRYPTO_OKP_KEYEL_D].len != key_len) ||
+	    (el[LWS_GENCRYPTO_OKP_KEYEL_X].len &&
+	     el[LWS_GENCRYPTO_OKP_KEYEL_X].len != key_len))
+		return -1;
+
+	if (!el[LWS_GENCRYPTO_OKP_KEYEL_D].len &&
+	    !el[LWS_GENCRYPTO_OKP_KEYEL_X].len)
+		return -1;
+
+	if (ctx->ctx[0])
+		CRYPT_EAL_PkeyFreeCtx(ctx->ctx[0]);
+
+	ctx->ctx[0] = CRYPT_EAL_PkeyNewCtx(alg);
+	if (!ctx->ctx[0]) {
+		lwsl_err("%s: CRYPT_EAL_PkeyNewCtx failed\n", __func__);
+		return -1;
+	}
+
+	if (el[LWS_GENCRYPTO_OKP_KEYEL_D].len) {
+		prv.id = alg;
+		prv.key.curve25519Prv.data =
+			(uint8_t *)el[LWS_GENCRYPTO_OKP_KEYEL_D].buf;
+		prv.key.curve25519Prv.len =
+			(uint32_t)el[LWS_GENCRYPTO_OKP_KEYEL_D].len;
+		ret = CRYPT_EAL_PkeySetPrv(ctx->ctx[0], &prv);
+		if (ret != CRYPT_SUCCESS) {
+			lwsl_err("%s: CRYPT_EAL_PkeySetPrv failed: %d\n",
+				 __func__, ret);
+			return -1;
+		}
+		ctx->has_private = 1;
+	} else
+		ctx->has_private = 0;
+
+	if (el[LWS_GENCRYPTO_OKP_KEYEL_X].len) {
+		pub.id = alg;
+		pub.key.curve25519Pub.data =
+			(uint8_t *)el[LWS_GENCRYPTO_OKP_KEYEL_X].buf;
+		pub.key.curve25519Pub.len =
+			(uint32_t)el[LWS_GENCRYPTO_OKP_KEYEL_X].len;
+		ret = CRYPT_EAL_PkeySetPub(ctx->ctx[0], &pub);
+		if (ret != CRYPT_SUCCESS) {
+			lwsl_err("%s: CRYPT_EAL_PkeySetPub failed: %d\n",
+				 __func__, ret);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+int
+lws_geneddsa_new_keypair(struct lws_genec_ctx *ctx, const char *curve_name,
+			 struct lws_gencrypto_keyelem *el)
+{
+	CRYPT_EAL_PkeyPub pub = {0};
+	CRYPT_EAL_PkeyPrv prv = {0};
+	CRYPT_PKEY_AlgId alg;
+	uint32_t key_len, sig_len;
+	uint32_t crv_len;
+	int ret;
+
+	if (ctx->genec_alg != LEGENEC_EDDSA)
+		return -1;
+
+	if (lws_openhitls_eddsa_curve_name_to_alg(curve_name, &alg, &key_len,
+						  &sig_len))
+		return -1;
+
+	(void)sig_len;
+
+	if (lws_hitls_init_rand() < 0)
+		return -1;
+
+	if (ctx->ctx[0])
+		CRYPT_EAL_PkeyFreeCtx(ctx->ctx[0]);
+	ctx->ctx[0] = CRYPT_EAL_PkeyNewCtx(alg);
+	if (!ctx->ctx[0]) {
+		lwsl_err("%s: CRYPT_EAL_PkeyNewCtx failed\n", __func__);
+		return -1;
+	}
+
+	ret = CRYPT_EAL_PkeyGen(ctx->ctx[0]);
+	if (ret != CRYPT_SUCCESS) {
+		lwsl_err("%s: CRYPT_EAL_PkeyGen failed: %d\n", __func__, ret);
+		goto bail;
+	}
+
+	crv_len = (uint32_t)strlen(curve_name) + 1;
+	if (lws_openhitls_eddsa_alloc_keyel(crv_len, el,
+					    LWS_GENCRYPTO_OKP_KEYEL_CRV,
+					    "okp-crv") ||
+	    lws_openhitls_eddsa_alloc_keyel(key_len, el,
+					    LWS_GENCRYPTO_OKP_KEYEL_X,
+					    "okp-x") ||
+	    lws_openhitls_eddsa_alloc_keyel(key_len, el,
+					    LWS_GENCRYPTO_OKP_KEYEL_D,
+					    "okp-d")) {
+		lwsl_err("%s: OOM allocating OKP key elements\n", __func__);
+		goto bail;
+	}
+
+	memcpy(el[LWS_GENCRYPTO_OKP_KEYEL_CRV].buf, curve_name, crv_len);
+
+	pub.id = alg;
+	pub.key.curve25519Pub.data = el[LWS_GENCRYPTO_OKP_KEYEL_X].buf;
+	pub.key.curve25519Pub.len = key_len;
+	ret = CRYPT_EAL_PkeyGetPub(ctx->ctx[0], &pub);
+	if (ret != CRYPT_SUCCESS) {
+		lwsl_err("%s: CRYPT_EAL_PkeyGetPub failed: %d\n", __func__,
+			 ret);
+		goto bail;
+	}
+	el[LWS_GENCRYPTO_OKP_KEYEL_X].len = pub.key.curve25519Pub.len;
+
+	prv.id = alg;
+	prv.key.curve25519Prv.data = el[LWS_GENCRYPTO_OKP_KEYEL_D].buf;
+	prv.key.curve25519Prv.len = key_len;
+	ret = CRYPT_EAL_PkeyGetPrv(ctx->ctx[0], &prv);
+	if (ret != CRYPT_SUCCESS) {
+		lwsl_err("%s: CRYPT_EAL_PkeyGetPrv failed: %d\n", __func__,
+			 ret);
+		goto bail;
+	}
+	el[LWS_GENCRYPTO_OKP_KEYEL_D].len = prv.key.curve25519Prv.len;
+	ctx->has_private = 1;
+
+	return 0;
+
+bail:
+	for (int n = LWS_GENCRYPTO_OKP_KEYEL_CRV;
+	     n < LWS_GENCRYPTO_OKP_KEYEL_COUNT; n++)
+		if (el[n].buf) {
+			lws_free_set_NULL(el[n].buf);
+			el[n].len = 0;
+		}
+	if (ctx->ctx[0]) {
+		CRYPT_EAL_PkeyFreeCtx(ctx->ctx[0]);
+		ctx->ctx[0] = NULL;
+	}
+
+	return -1;
+}
+
+int
+lws_geneddsa_hash_sig_verify_jws(struct lws_genec_ctx *ctx, const uint8_t *in,
+				 size_t in_len, const uint8_t *sig,
+				 size_t sig_len)
+{
+	int ret;
+
+	if (ctx->genec_alg != LEGENEC_EDDSA || !ctx->ctx[0] ||
+	    in_len > UINT32_MAX || sig_len > UINT32_MAX)
+		return -1;
+
+	ret = CRYPT_EAL_PkeyVerify(ctx->ctx[0], CRYPT_MD_SHA512, in,
+				   (uint32_t)in_len, sig, (uint32_t)sig_len);
+	if (ret != CRYPT_SUCCESS)
+		return -1;
+
+	return 0;
+}
+
+int
+lws_geneddsa_hash_sign_jws(struct lws_genec_ctx *ctx, const uint8_t *in,
+			   size_t in_len, uint8_t *sig, size_t sig_len)
+{
+	uint32_t out_len = (uint32_t)sig_len;
+	int ret;
+
+	if (ctx->genec_alg != LEGENEC_EDDSA || !ctx->ctx[0] ||
+	    in_len > UINT32_MAX || sig_len > UINT32_MAX)
+		return -1;
+
+	if (!ctx->has_private)
+		return -1;
+
+	ret = CRYPT_EAL_PkeySign(ctx->ctx[0], CRYPT_MD_SHA512, in,
+				 (uint32_t)in_len, sig, &out_len);
+	if (ret != CRYPT_SUCCESS)
+		return -1;
+
+	return (int)out_len;
+}
