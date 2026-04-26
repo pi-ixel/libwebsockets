@@ -869,6 +869,8 @@ lws_create_context(const struct lws_context_creation_info *info)
 	lwsl_cx_notice(context, "LWS: %s, BoringSSL, %s%s", library_version, opts_str, s);
 #elif defined(LWS_WITH_AWSLC)
 	lwsl_cx_notice(context, "LWS: %s, AWS-LC, %s%s", library_version, opts_str, s);
+#elif defined(LWS_WITH_BEARSSL)
+	lwsl_cx_notice(context, "LWS: %s, BearSSL, %s%s", library_version, opts_str, s);
 #elif defined(OPENSSL_VERSION_NUMBER) && (OPENSSL_VERSION_NUMBER >= 0x10100000L)
 	lwsl_cx_notice(context, "LWS: %s, %s, %s%s", library_version, OpenSSL_version(OPENSSL_VERSION), opts_str, s);
 #elif defined(OPENSSL_VERSION_NUMBER)
@@ -972,6 +974,8 @@ lws_create_context(const struct lws_context_creation_info *info)
 	context->tls_ops = &tls_ops_schannel;
 #elif defined(LWS_WITH_GNUTLS)
 	context->tls_ops = &tls_ops_gnutls;
+#elif defined(LWS_WITH_BEARSSL)
+	context->tls_ops = &tls_ops_bearssl;
 #else
 	context->tls_ops = &tls_ops_openssl;
 #endif

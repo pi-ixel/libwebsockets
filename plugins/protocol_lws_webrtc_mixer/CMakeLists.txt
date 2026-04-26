@@ -1,6 +1,7 @@
 set(PLUGIN_NAME protocol_lws_webrtc_mixer)
 set(requirements 1)
 require_lws_config(LWS_WITH_GSTREAMER 1 requirements)
+require_lws_config(LWS_WITH_WEBRTC 1 requirements)
 
 if (requirements)
 	find_package(PkgConfig QUIET)

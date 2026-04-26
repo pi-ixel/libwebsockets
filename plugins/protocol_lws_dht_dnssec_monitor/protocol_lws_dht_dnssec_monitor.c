@@ -903,7 +903,7 @@ scan_tls_domains_cb(const char *dirpath, void *user, struct lws_dir_entry *lde)
 	if (lde->type != LDOT_DIR || lde->name[0] == '.') return 0;
 
 	char tls_path[1024];
-	lws_snprintf(tls_path, sizeof(tls_path), "%s/domains/%s/tls", vhd->base_dir, lde->name);
+	lws_snprintf(tls_path, sizeof(tls_path), "%s/domains/%s/conf.d", vhd->base_dir, lde->name);
 
 	struct scan_tls_ctx ctx = { vhd, lde->name };
 	lws_dir(tls_path, &ctx, scan_tls_configs_cb);

@@ -1113,6 +1113,11 @@ int _lws_generic_transaction_completed_active_conn(struct lws **_wsi,
 #if defined(LWS_WITH_TLS)
 	/* pass on the tls */
 
+#if defined(LWS_TLS_SYNTHESIZE_CB)
+	lws_sul_cancel(&wsi->tls.sul_cb_synth);
+	lws_sess_cache_synth_cb(&wsi->tls.sul_cb_synth);
+#endif
+
 	wnew->tls = wsi->tls;
 	wsi->tls.client_bio = NULL;
 	wsi->tls.ssl = NULL;
