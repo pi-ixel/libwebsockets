@@ -10,39 +10,40 @@
 #include <libwebsockets.h>
 
 enum {
-	LWS_SW_ALG,
-	LWS_SW_COSE_MAC,
-	LWS_SW_COSE_MAC0,
-	LWS_SW_COSE_SIGN,
-	LWS_SW_COSE_SIGN1,
-	LWS_SW_EXTRA,
-	LWS_SW_KID,
-	LWS_SW_KID_HEX,
+	LWS_SW_D,
 	LWS_SW_STDIN,
 	LWS_SW_STDOUT,
-	LWS_SW_D,
-	LWS_SW_K,
+	LWS_SW_COSE_SIGN,
+	LWS_SW_COSE_SIGN1,
+	LWS_SW_COSE_MAC,
+	LWS_SW_COSE_MAC0,
 	LWS_SW_S,
+	LWS_SW_KID,
+	LWS_SW_KID_HEX,
+	LWS_SW_EXTRA,
+	LWS_SW_K,
+	LWS_SW_ALG,
 	LWS_SW_HELP,
 };
 
 static const struct lws_switches switches[] = {
-	[LWS_SW_ALG]	= { "--alg",           "COSE alg to use for signing (e.g. ES256)" },
-	[LWS_SW_COSE_MAC]	= { "--cose-mac",      "Emit a COSE_Mac message" },
-	[LWS_SW_COSE_MAC0]	= { "--cose-mac0",     "Emit a COSE_Mac0 message" },
-	[LWS_SW_COSE_SIGN]	= { "--cose-sign",     "Emit a COSE_Sign message (multi-signature)" },
-	[LWS_SW_COSE_SIGN1]	= { "--cose-sign1",    "Emit a COSE_Sign1 message (single signature)" },
-	[LWS_SW_EXTRA]	= { "--extra",         "Extra application data appended to signature (hex)" },
-	[LWS_SW_KID]	= { "--kid",           "String specifying the kid to filter keys from keyset" },
-	[LWS_SW_KID_HEX]	= { "--kid-hex",       "Hex string specifying the kid to filter keys from keyset" },
-	[LWS_SW_STDIN]	= { "--stdin",         "Path to file to use as stdin (if not piping)" },
-	[LWS_SW_STDOUT]	= { "--stdout",        "Path to file to write to stdout (if not piping)" },
-	[LWS_SW_D]	= { "-d",              "Debug logs (e.g. -d 15)" },
-	[LWS_SW_K]	= { "-k",              "Path to keyset file to use" },
-	[LWS_SW_S]	= { "-s",              "Sign instead of verify" },
-	[LWS_SW_HELP]	= { "--help",		"Show this help information (-h, --help)" },
+	[LWS_SW_D]		= { "-d",              "Set logging verbosity" },
+	[LWS_SW_STDIN]		= { "--stdin",         "Read the input payload from stdin" },
+	[LWS_SW_STDOUT]		= { "--stdout",        "Write the output payload to stdout" },
+	[LWS_SW_COSE_SIGN]	= { "--cose-sign",     "Emit a COSE_Sign object" },
+	[LWS_SW_COSE_SIGN1]	= { "--cose-sign1",    "Emit a COSE_Sign1 object" },
+	[LWS_SW_COSE_MAC]	= { "--cose-mac",      "Emit a COSE_Mac object" },
+	[LWS_SW_COSE_MAC0]	= { "--cose-mac0",     "Emit a COSE_Mac0 object" },
+	[LWS_SW_S]		= { "-s",              "Enable detached payload mode" },
+	[LWS_SW_KID]		= { "--kid",           "Set the key id as text" },
+	[LWS_SW_KID_HEX]	= { "--kid-hex",       "Set the key id as hex" },
+	[LWS_SW_EXTRA]		= { "--extra",         "Provide extra protected header JSON" },
+	[LWS_SW_K]		= { "-k",              "Load the key from a file" },
+	[LWS_SW_ALG]		= { "--alg",           "Select the signing algorithm" },
+	[LWS_SW_HELP]		= { "--help",		"Show this help information" },
 };
 
+#include <stdio.h>
 #include <sys/types.h>
 #include <fcntl.h>
 

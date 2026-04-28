@@ -8,6 +8,7 @@
  */
 
 #include <libwebsockets.h>
+#include <stdio.h>
 #if defined(LWS_HAS_GETOPT_LONG) || defined(WIN32)
 #include <getopt.h>
 #endif

@@ -15,17 +15,20 @@
 #include <libwebsockets.h>
 
 enum {
-	LWS_SW_H1,
+	LWS_SW_D,
 	LWS_SW_L,
+	LWS_SW_H1,
 	LWS_SW_HELP,
 };
 
 static const struct lws_switches switches[] = {
-	[LWS_SW_H1]	= { "--h1",            "Enable --h1 feature" },
-	[LWS_SW_L]	= { "-l",              "Enable -l feature" },
+	[LWS_SW_D]	= { "-d",              "Debug logs (e.g. -d 15)" },
+	[LWS_SW_L]	= { "-l",              "Enable local test-server mode" },
+	[LWS_SW_H1]	= { "--h1",            "Force HTTP/1.1" },
 	[LWS_SW_HELP]	= { "--help",		"Show this help information" },
 };
 
+#include <stdio.h>
 #include <string.h>
 #include <signal.h>
 
@@ -192,7 +195,7 @@ int main(int argc, const char **argv)
 	 */
 	info.fd_limit_per_thread = 1 + 1 + 1;
 
-#if defined(LWS_WITH_MBEDTLS) || defined(USE_WOLFSSL)
+#if defined(LWS_WITH_MBEDTLS) || defined(USE_WOLFSSL) || defined(LWS_WITH_OPENHITLS)
 	/*
 	 * OpenSSL uses the system trust store.  mbedTLS has to be told which
 	 * CA to trust explicitly.

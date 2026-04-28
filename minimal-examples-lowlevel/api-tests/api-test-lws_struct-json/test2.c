@@ -15,6 +15,7 @@
  */
 
 #include <libwebsockets.h>
+#include <stdio.h>
 
 static const char * const test2_json =
 "{"

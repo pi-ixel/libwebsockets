@@ -27,6 +27,7 @@ static const struct lws_switches switches[] = {
 	[LWS_SW_HELP]	= { "--help",		"Show this help information" },
 };
 
+#include <stdio.h>
 #include <string.h>
 #include <signal.h>
 

@@ -15,21 +15,22 @@
 #include <libwebsockets.h>
 
 enum {
-	LWS_SW_H1,
 	LWS_SW_D,
 	LWS_SW_L,
 	LWS_SW_S,
+	LWS_SW_H1,
 	LWS_SW_HELP,
 };
 
 static const struct lws_switches switches[] = {
-	[LWS_SW_H1]	= { "--h1",            "Enable --h1 feature" },
 	[LWS_SW_D]	= { "-d",              "Debug logs (e.g. -d 15)" },
-	[LWS_SW_L]	= { "-l",              "Enable -l feature" },
-	[LWS_SW_S]	= { "-s",              "Use TLS / https" },
+	[LWS_SW_L]	= { "-l",              "Enable local test-server mode" },
+	[LWS_SW_S]	= { "-s",              "Override the server name" },
+	[LWS_SW_H1]	= { "--h1",            "Force HTTP/1.1" },
 	[LWS_SW_HELP]	= { "--help",		"Show this help information" },
 };
 
+#include <stdio.h>
 #include <string.h>
 #include <signal.h>
 #include <time.h>
@@ -104,8 +105,8 @@ callback_http(struct lws *wsi, enum lws_callback_reasons reason,
 		}
 		if (!lws_tls_peer_cert_info(wsi, LWS_TLS_CERT_INFO_AUTHORITY_KEY_ID_ISSUER,
 					    ci, 0)) {
-			lwsl_notice(" AUTHORITY_KEY_ID ISSUER\n");
-			lwsl_hexdump_notice(ci->ns.name, (size_t)ci->ns.len);
+			lwsl_notice(" AUTHORITY_KEY_ID ISSUER: %s\n",
+				    ci->ns.name);
 		}
 		if (!lws_tls_peer_cert_info(wsi, LWS_TLS_CERT_INFO_AUTHORITY_KEY_ID_SERIAL,
 					    ci, 0)) {
@@ -227,7 +228,7 @@ int main(int argc, const char **argv)
 	 */
 	info.fd_limit_per_thread = 1 + 1 + 1;
 
-#if defined(LWS_WITH_MBEDTLS) || defined(USE_WOLFSSL)
+#if defined(LWS_WITH_MBEDTLS) || defined(USE_WOLFSSL) || defined(LWS_WITH_OPENHITLS)
 	/*
 	 * OpenSSL uses the system trust store.  mbedTLS has to be told which
 	 * CA to trust explicitly.

@@ -28,6 +28,7 @@ static const struct lws_switches switches[] = {
 	[LWS_SW_HELP]	= { "--help",		"Show this help information" },
 };
 
+#include <stdio.h>
 #include <string.h>
 #include <signal.h>
 
@@ -198,7 +199,7 @@ int main(int argc, const char **argv)
 	 */
 	info.fd_limit_per_thread = 1 + 1 + 1;
 
-#if defined(LWS_WITH_MBEDTLS) || defined(USE_WOLFSSL)
+#if defined(LWS_WITH_MBEDTLS) || defined(USE_WOLFSSL) || defined(LWS_WITH_OPENHITLS)
 	/*
 	 * OpenSSL uses the system trust store.  mbedTLS has to be told which
 	 * CA to trust explicitly.

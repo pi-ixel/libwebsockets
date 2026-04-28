@@ -132,15 +132,18 @@ enum lws_callback_reasons {
 	 * including OpenSSL support, this callback allows your user code
 	 * to perform extra SSL_CTX_load_verify_locations() or similar
 	 * calls to direct OpenSSL where to find certificates the client
-	 * can use to confirm the remote server identity.  user is the
-	 * OpenSSL SSL_CTX* */
+	 * can use to confirm the remote server identity.  user is the backend
+	 * TLS client context object. On OpenSSL that is an `SSL_CTX *`. On
+	 * OpenHiTLS it is the public `SSL_CTX *` alias used by lws for that
+	 * backend. */
 
 	LWS_CALLBACK_OPENSSL_LOAD_EXTRA_SERVER_VERIFY_CERTS	= 22,
 	/**< if configured for
 	 * including OpenSSL support, this callback allows your user code
 	 * to load extra certificates into the server which allow it to
 	 * verify the validity of certificates returned by clients.  user
-	 * is the server's OpenSSL SSL_CTX* and in is the lws_vhost */
+	 * is the server backend TLS context object and in is the lws_vhost.
+	 * On OpenSSL that backend object is an `SSL_CTX *`. */
 
 	LWS_CALLBACK_OPENSSL_PERFORM_CLIENT_CERT_VERIFICATION	= 23,
 	/**< if the libwebsockets vhost was created with the option
@@ -153,8 +156,12 @@ enum lws_callback_reasons {
 	 *  http://www.openssl.org/docs/ssl/SSL_CTX_set_verify.html
 	 * to understand more detail about the OpenSSL callback that
 	 * generates this libwebsockets callback and the meanings of the
-	 * arguments passed.  In this callback, user is the x509_ctx,
-	 * in is the ssl pointer and len is preverify_ok
+	 * arguments passed.  In this callback, user is the backend verify
+	 * store context, in is the backend connection pointer and len is
+	 * preverify_ok. On OpenSSL, user is `X509_STORE_CTX *` and in is
+	 * `SSL *`. On OpenHiTLS, `X509_STORE_CTX *` is the public lws alias
+	 * for `HITLS_CERT_StoreCtx *`, and `SSL *` is the public lws alias
+	 * for `HITLS_Ctx *`.
 	 * Notice that this callback maintains libwebsocket return
 	 * conventions, return 0 to mean the cert is OK or 1 to fail it.
 	 * This also means that if you don't handle this callback then
@@ -183,8 +190,12 @@ enum lws_callback_reasons {
 	 * See http://www.openssl.org/docs/ssl/SSL_CTX_set_verify.html
 	 * to understand more detail about the OpenSSL callback that
 	 * generates this libwebsockets callback and the meanings of the
-	 * arguments passed. In this callback, user is the x509_ctx,
-	 * in is the ssl pointer and len is preverify_ok.
+	 * arguments passed. In this callback, user is the backend verify
+	 * store context, in is the backend connection pointer and len is
+	 * preverify_ok. On OpenSSL, user is `X509_STORE_CTX *` and in is
+	 * `SSL *`. On OpenHiTLS, `X509_STORE_CTX *` is the public lws alias
+	 * for `HITLS_CERT_StoreCtx *`, and `SSL *` is the public lws alias
+	 * for `HITLS_Ctx *`.
 	 *
 	 * THIS IS NOT RECOMMENDED BUT if a cert validation error shall be
 	 * overruled and cert shall be accepted as ok,
