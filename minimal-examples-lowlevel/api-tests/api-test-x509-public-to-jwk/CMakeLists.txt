@@ -1,22 +1,25 @@
-project(lws-api-test-gencrypto C)
+project(lws-api-test-x509-public-to-jwk C)
 cmake_minimum_required(VERSION 3.10)
 find_package(libwebsockets CONFIG REQUIRED)
 list(APPEND CMAKE_MODULE_PATH ${LWS_CMAKE_DIR})
 include(CheckCSourceCompiles)
 include(LwsCheckRequirements)
 
-set(SAMP lws-api-test-gencrypto)
-set(SRCS main.c lws-genaes.c lws-genec.c lws-genrsa.c)
+set(SAMP lws-api-test-x509-public-to-jwk)
+set(SRCS main.c)
 
 set(requirements 1)
-require_lws_config(LWS_WITH_GENCRYPTO 1 requirements)
+require_lws_config(LWS_WITH_TLS 1 requirements)
 require_lws_config(LWS_WITH_JOSE 1 requirements)
-require_lws_config(USE_WOLFSSL 0 requirements)
 
 if (requirements)
 
 	add_executable(${SAMP} ${SRCS})
-	add_test(NAME api-test-gencrypto COMMAND lws-api-test-gencrypto)
+	add_test(NAME api-test-x509-public-to-jwk COMMAND lws-api-test-x509-public-to-jwk)
+
+	set_tests_properties(api-test-x509-public-to-jwk PROPERTIES
+			     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+			     TIMEOUT 30)
 
 	if (websockets_shared)
 		target_link_libraries(${SAMP} websockets_shared ${LIBWEBSOCKETS_DEP_LIBS})
@@ -25,4 +28,3 @@ if (requirements)
 		target_link_libraries(${SAMP} websockets ${LIBWEBSOCKETS_DEP_LIBS})
 	endif()
 endif()
-

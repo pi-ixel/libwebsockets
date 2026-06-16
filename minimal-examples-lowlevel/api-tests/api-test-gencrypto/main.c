@@ -24,6 +24,8 @@ int
 test_genaes(struct lws_context *context);
 int
 test_genec(struct lws_context *context);
+int
+test_genrsa(struct lws_context *context);
 
 #if defined(LWS_WITH_MBEDTLS) && defined(LWS_WITH_TLS)
 /* int
@@ -64,6 +66,7 @@ int main(int argc, const char **argv)
 
 	result |= test_genaes(context);
 	result |= test_genec(context);
+	result |= test_genrsa(context);
 
 #if defined(LWS_WITH_MBEDTLS) && defined(LWS_WITH_TLS)
 	/* result |= test_mbedtls_cipherlist(context); */ /* Requires static linking to access inner OpenSSL shim symbols */
